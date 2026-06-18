@@ -117,31 +117,77 @@ class ArchitectureBottleneckDetector:
         return True
 
     def diagnose(self, agent_instance, capability_gap: str = "") -> dict:
-        """诊断架构瓶颈：用 LLM 分析为什么当前架构不够
-
-        Args:
-            agent_instance: AgentLoop 实例
-            capability_gap: 手动描述的能力缺口
-
-        Returns:
-            { bottleneck_type, target_file, rationale, capability_gap }
-        """
+        """诊断架构瓶颈"""
         symptoms_lines = []
         unknown_tool_count = 0
+        tool_call_patterns: dict[str, int] = {}
+        error_patterns: dict[str, int] = {}
+        
         for log in self.failure_log[-5:]:
             task = log.get("task_desc", "")[:100]
             symptoms_lines.append(f"- 任务: {task}")
             for i, r in enumerate(log.get("reports", [])):
                 symptoms_lines.append(f"  优化{i+1}: analyzed={r['analyzed']} kept={r['kept']}")
-                # 检查是否有 Unknown tool 错误 → 优先判断工具不足
-            # 检查失败case中的error_msg
+            # 统计工具调用模式 — 从所有上下文消息中提取
             for case in log.get("cases", []):
                 err = case.get("error_msg", "")
                 if "Unknown tool" in err:
                     unknown_tool_count += 1
-                    symptoms_lines.append(f"  [工具缺失] {err[:120]}")
+                for msg in case.get("context_snapshot", []):
+                    content = str(msg.get("content", ""))
+                    # 统计 ERROR 出现次数
+                    if "ERROR" in content:
+                        error_patterns["ERROR"] = error_patterns.get("ERROR", 0) + 1
+                    if "调用工具" in content:
+                        error_patterns["调用工具"] = error_patterns.get("调用工具", 0) + 1
+                    # 提取工具名
+                    import re
+                    matches = re.findall(r"调用工具:\s*(\w+)", content)
+                    for m in matches:
+                        tool_call_patterns[m] = tool_call_patterns.get(m, 0) + 1
 
         symptoms_text = "\n".join(symptoms_lines[-20:]) or "(无失败记录)"
+        
+        # 工具调用分析 — 辅助区分瓶颈类型
+        if tool_call_patterns:
+            top_tools = sorted(tool_call_patterns.items(), key=lambda x: -x[1])[:5]
+            symptoms_text += f"\n\n工具调用统计:\n"
+            for name, count in top_tools:
+                symptoms_text += f"  - {name}: {count}次\n"
+            # 诊断提示
+            if len(tool_call_patterns) == 1 and list(tool_call_patterns.values())[0] >= 4:
+                symptoms_text += "\n[推断] 仅依赖1个工具且重复≥4次 → 可能是 no_execution_loop 或 tool_too_simple\n"
+            elif len(tool_call_patterns) >= 3:
+                symptoms_text += "\n[推断] 尝试了多种工具但均失败 → 可能缺少调试闭环 (no_execution_loop)\n"
+        
+        if error_patterns:
+            symptoms_text += f"\n错误模式统计: {error_patterns}"
+            if error_patterns.get("ERROR", 0) >= 5:
+                symptoms_text += "\n[推断] 大量ERROR但仍不读错误输出 → 大概率 no_execution_loop (无 read→error→fix 循环)\n"
+
+        gap_text = capability_gap or "Agent 无法完成需要多文件协调、复杂依赖或长上下文的任务"
+
+        # 快速判定：Unknown tool → tool_too_simple
+        if unknown_tool_count >= 1:
+            return {
+                "bottleneck_type": "tool_too_simple",
+                "target_file": "tools/builtin/__init__.py",
+                "rationale": f"Agent 多次尝试调用不存在的工具({unknown_tool_count}次)，当前工具集不足",
+                "capability_gap": gap_text,
+                "confidence": 0.95,
+            }
+        
+        # 快速判定：仅1个工具失败大量+大量ERROR → no_execution_loop
+        if (len(tool_call_patterns) <= 2 
+            and error_patterns.get("ERROR", 0) >= 5
+            and error_patterns.get("调用工具", 0) >= 5):
+            return {
+                "bottleneck_type": "no_execution_loop",
+                "target_file": "agent/loop.py",
+                "rationale": f"Agent 在大量工具ERROR后({error_patterns.get('ERROR',0)}次)从未尝试读错误输出或修正策略，缺乏 write→test→read_error→fix 的执行闭环",
+                "capability_gap": gap_text,
+                "confidence": 0.90,
+            }
         gap_text = capability_gap or "Agent 无法完成需要多文件协调、复杂依赖或长上下文的任务"
 
         # 快速判定：如果出现 Unknown tool 错误 → 直接判定为 tool_too_simple
