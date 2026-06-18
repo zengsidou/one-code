@@ -124,23 +124,26 @@ class ChallengeGenerator:
         stats = profile.get_all_category_stats()
         weak = profile.get_weak_areas()
 
-        # 成功率 > 80% 且近期趋势上升 → 应该升级难度
-        overall = stats.get("all", {})
-        if overall.get("success_rate", 0) >= 0.8 and summary.get("recent_avg_diff", 2) >= summary.get("overall_avg_diff", 2):
+        recent_rate = summary.get("recent_success_rate", 0)
+        recent_diff = summary.get("recent_avg_diff", 2)
+        overall_diff = summary.get("overall_avg_diff", 2)
+
+        # 近期成功率 > 80% 且难度持平或上升 → 升级
+        if recent_rate >= 0.8 and recent_diff >= overall_diff:
             return {
                 "action": "upgrade",
-                "current_level": summary["recent_avg_diff"],
-                "suggested_level": min(5, int(summary["recent_avg_diff"] + 1)),
-                "reason": "近期成功率高且难度稳定，可以挑战更高难度",
+                "current_level": recent_diff,
+                "suggested_level": min(5, int(recent_diff + 1)),
+                "reason": f"近期成功率{recent_rate:.0%}且难度稳定，可以挑战更高难度",
             }
 
-        # 成功率 < 50% → 降低难度或集中练习
-        if overall.get("success_rate", 1) < 0.5:
+        # 近期成功率 < 50% → 降低难度
+        if recent_rate < 0.5 and summary["total_tasks"] >= 5:
             return {
                 "action": "consolidate",
-                "current_level": summary["recent_avg_diff"],
-                "suggested_level": max(1, int(summary["recent_avg_diff"] - 1)),
-                "reason": f"成功率为 {overall['success_rate']}，需要巩固当前难度",
+                "current_level": recent_diff,
+                "suggested_level": max(1, int(recent_diff - 1)),
+                "reason": f"近期成功率为 {recent_rate:.0%}，需要巩固当前难度",
                 "focus_weak_areas": weak,
             }
 
