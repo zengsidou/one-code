@@ -154,7 +154,7 @@ class AgentLoop:
                 for tc in tool_calls:
                     tool_msg_content = f"调用工具: {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})"
                     self._step_trace.append(f"Step{step}: call {tc.name}")
-                    self.memory.add_message(Message(role="assistant", content=tool_msg_content))
+                    self.memory.add_message(Message(role="assistant", content=tool_msg_content, tool_calls=[tc]))
                     result = self.registry.execute(tc.name, tc.arguments)
                     self.memory.add_message(Message(
                         role="tool", content=result,

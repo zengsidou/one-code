@@ -34,6 +34,10 @@ class ShortTermMemory:
         while total > self.max_tokens and len(self._messages) > 2:
             old = self._messages.popleft()
             total -= self._token_count(str(old.content or ""))
+            # 确保不留下孤立的 tool 消息（前一个带 tool_calls 的 assistant 已被裁剪）
+            while self._messages and self._messages[0].role == "tool":
+                orphan = self._messages.popleft()
+                total -= self._token_count(str(orphan.content or ""))
 
     def clear(self):
         self._messages.clear()

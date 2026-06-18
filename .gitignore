@@ -7,3 +7,8 @@ __pycache__/
 *.pyc
 .env
 *.tmp
+fix_history.json
+skill_library.json
+ability_profile.json
+meta_fix_history.json
+*.py-generated
