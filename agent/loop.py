@@ -19,6 +19,7 @@ from agent.fix_history import FixHistory
 from agent.meta_optimize import MetaOptimizer
 from agent.evolve import TaskPostMortem, SkillLibrary, AbilityProfile, ChallengeGenerator
 from agent.evolve import ArchitectureBottleneckDetector, ArchitectureProposalGenerator, ArchitectureApplier, ArchitectureValidator
+from agent.orchestrator import AgentOrchestrator
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -48,6 +49,7 @@ class AgentLoop:
         fix_history_file: str = "./fix_history.json",
         skill_library_file: str = "./skill_library.json",
         ability_profile_file: str = "./ability_profile.json",
+        enable_orchestrate: bool = False,
     ):
         if llm is not None:
             self.llm = llm
@@ -90,6 +92,7 @@ class AgentLoop:
         self._arch_proposer = ArchitectureProposalGenerator(self.llm) if enable_evolution else None
         self._arch_applier = ArchitectureApplier() if enable_evolution else None
         self._arch_validator = ArchitectureValidator() if enable_evolution else None
+        self._orchestrator = AgentOrchestrator(self.llm, self.registry) if enable_orchestrate else None
         self._step_trace: list[str] = []
         self._last_step_count = 0
 
@@ -543,6 +546,59 @@ class AgentLoop:
             "post_mortem_count": len(self._post_mortem.history),
             "recent_insights": self._post_mortem.get_recent_insights(3),
         }
+
+    def decompose_and_run(self, task: str, max_subtasks: int = 4) -> str:
+        """将复杂任务拆解为子任务，并行执行后合并结果
+
+        用于突破单 Agent 处理大规模任务的瓶颈。
+        """
+        if not self._orchestrator:
+            return "[ERROR] Orchestrator 未启用 (enable_orchestrate=False)"
+
+        # 用 LLM 拆解任务
+        decompose_prompt = [
+            Message(role="system", content="将以下任务拆解为几个独立的子任务。只输出 JSON 数组，每个元素是 {\"task\": \"描述\"}。"),
+            Message(role="user", content=f"任务: {task}\n拆成最多 {max_subtasks} 个子任务。"),
+        ]
+        try:
+            resp = self.llm.generate(decompose_prompt, tools=None)
+            subtasks = self._parse_subtasks(resp.content or "")
+        except Exception:
+            return f"[ERROR] 任务拆解失败"
+
+        if not subtasks:
+            return f"[ERROR] 无法拆解任务"
+
+        # 并行执行（传入写文件工具）
+        results = self._orchestrator.fan_out(
+            subtasks,
+            tool_allowlist=["read_file", "write_file", "list_dir", "run_shell", "calculate"],
+        )
+
+        # 合并结果
+        parts = []
+        for r in results:
+            if r.get("error"):
+                parts.append(f"[FAIL] {r['task'][:60]}: {r['error'][:100]}")
+            else:
+                parts.append(f"[OK] {r['task'][:60]}: {r['result'][:200]}")
+
+        return f"拆解为 {len(subtasks)} 个子任务并行执行:\n" + "\n".join(parts)
+
+    @staticmethod
+    def _parse_subtasks(text: str) -> list[dict]:
+        import json
+        text = text.strip()
+        if text.startswith("```"): text = text.split("\n",1)[-1].rsplit("```",1)[0]
+        try:
+            data = json.loads(text)
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and "subtasks" in data:
+                return data["subtasks"]
+        except json.JSONDecodeError:
+            pass
+        return []
 
     def _try_architect_evolve(self, task_desc: str) -> dict:
         """尝试架构自进化：诊断 → 生成改动 → 应用+重载 → 验证 → 保留/回滚

@@ -58,6 +58,7 @@ class SubAgent:
                 messages.append(Message(
                     role="assistant",
                     content=f"调用工具: {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})",
+                    tool_calls=[tc],
                 ))
 
                 result = self.registry.execute(tc.name, tc.arguments)
