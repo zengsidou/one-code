@@ -4,7 +4,7 @@ import os
 from tools.registry import run_shell
 
 
-def register_builtin_tools(registry) -> None:
+def register_builtin_tools(registry, sandbox=None) -> None:
     @registry.register("read_file", "读取指定路径的文件内容")
     def read_file(path: str) -> str:
         try:
@@ -47,6 +47,15 @@ def register_builtin_tools(registry) -> None:
 
     @registry.register("run_shell", "执行 Shell 命令并返回输出，超时默认 30 秒")
     def _run_shell(command: str, timeout: int = 30) -> str:
+        if sandbox:
+            result = sandbox.execute(command)
+            if result["ok"]:
+                out = result["output"]
+                if result["error"]:
+                    out += "\n[stderr] " + result["error"]
+                return f"{out}\n[done in {result['duration_ms']}ms]"
+            else:
+                return f"[{result['blocked_by'] or 'ERROR'}] {result['error']}"
         return run_shell(command, timeout)
 
     @registry.register("search_web", "网络搜索占位 — 实际可接入 Tavily/SerpAPI")

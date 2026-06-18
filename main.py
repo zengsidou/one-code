@@ -16,6 +16,7 @@ from memory.long_term import LongTermMemory
 from memory import MemoryManager
 from agent.loop import AgentLoop
 from agent.models import Message
+from sandbox import SandboxPolicy, SafeExecutor
 
 
 class Colors:
@@ -48,7 +49,8 @@ def main():
 
     llm = OllamaClient(model="deepseek-r1:8b", embedding_model="bge-m3:latest")
     registry = ToolRegistry(safe_mode=True)
-    register_builtin_tools(registry)
+    sandbox = SafeExecutor(policy=SandboxPolicy())
+    register_builtin_tools(registry, sandbox=sandbox)
     short_mem = ShortTermMemory(max_tokens=4096)
     long_mem = LongTermMemory(llm, persist_dir="./chroma_data")
     memory = MemoryManager(short=short_mem, long=long_mem)
@@ -63,6 +65,7 @@ def main():
     print(f"  Model:     {Colors.c(llm.model, Colors.BLUE)}")
     print(f"  Embedding: {Colors.c(llm.embedding_model, Colors.BLUE)}")
     print(f"  Tools:     {Colors.c(', '.join(registry.tool_names), Colors.GREEN)}")
+    print(f"  Sandbox:   {Colors.c(sandbox.policy.level.value.upper(), Colors.MAGENTA)}")
     print(f"  Safe Mode: {Colors.c('ON', Colors.MAGENTA)}")
     print(Colors.c("-" * 60, Colors.CYAN))
     print(f"  /exit  退出    /memory 查看记忆")

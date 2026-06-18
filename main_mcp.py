@@ -12,11 +12,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tools.registry import ToolRegistry
 from tools.builtin import register_builtin_tools
 from mcp.server import MCPServer
+from sandbox import SandboxPolicy, SafeExecutor
 
 
 def main():
     registry = ToolRegistry(safe_mode=True)
-    register_builtin_tools(registry)
+    sandbox = SafeExecutor(policy=SandboxPolicy())
+    register_builtin_tools(registry, sandbox=sandbox)
 
     server = MCPServer(
         registry=registry,
