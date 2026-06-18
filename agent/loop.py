@@ -298,7 +298,7 @@ class AgentLoop:
 
             # 架构自进化：元优化也无效，可能是架构瓶颈
             if self.enable_evolution and self._arch_bottleneck:
-                self._arch_bottleneck.record_failure(user_input, [report])
+                self._arch_bottleneck.record_failure(user_input, [report], self._last_failure_cases)
                 if self._arch_bottleneck.is_bottleneck(min_consecutive_failures=2):
                     if debug:
                         print("  [ARCH-EVOLVE] 检测到架构瓶颈，尝试架构自进化...")

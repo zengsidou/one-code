@@ -63,14 +63,23 @@ ARCHITECTURE_PROPOSAL_PROMPT = """你是一个 Agent 架构师。你需要修改
 {{
   "file_path": "要修改的文件路径",
   "rationale": "为什么做这个修改",
-  "change_type": "add_class / add_method / modify_method / add_import",
+  "change_type": "add_class / add_method / modify_method / add_import / add_tool",
   "target_location": "在哪个位置插入或替换（描述行号或函数名）",
-  "new_code": "完整的新代码片段（注意缩进）",
+  "new_code": "完整的新代码片段（注意缩进）。如果是新工具函数，必须包含 @registry.register 装饰器，格式见现有工具",
   "old_code_hint": "需要被替换的旧代码片段（如为新增则为空）",
   "expected_effect": "预期这个改动如何突破瓶颈"
 }}
 
 只输出 JSON，不要任何解释文字。"""
+
+TOOL_GENERATION_HINT = """
+注意：你在为 Agent 添加新工具函数。请遵循以下规范：
+1. 函数需要 return str 类型
+2. 使用 @registry.register("tool_name", "工具描述") 装饰器
+3. 函数参数需要类型标注 (str, int, bool 等)
+4. 工具描述要清晰说明用途和参数
+5. 参考文件中现有工具的格式
+"""
 
 
 class ArchitectureBottleneckDetector:
@@ -83,7 +92,7 @@ class ArchitectureBottleneckDetector:
         self.llm = llm_adapter
         self.failure_log: list[dict] = []
 
-    def record_failure(self, task_desc: str, optimize_reports: list[dict]):
+    def record_failure(self, task_desc: str, optimize_reports: list[dict], failure_cases: list[dict] | None = None):
         """记录一次优化失败的尝试"""
         self.failure_log.append({
             "task_desc": task_desc[:200],
@@ -92,6 +101,7 @@ class ArchitectureBottleneckDetector:
                 "kept": r.get("fixes_kept", 0),
                 "rolled": r.get("fixes_rolled_back", 0),
             } for r in optimize_reports],
+            "cases": failure_cases or [],
             "timestamp": datetime.now().isoformat(),
         })
 
@@ -117,12 +127,32 @@ class ArchitectureBottleneckDetector:
             { bottleneck_type, target_file, rationale, capability_gap }
         """
         symptoms_lines = []
+        unknown_tool_count = 0
         for log in self.failure_log[-5:]:
-            symptoms_lines.append(f"- 任务: {log.get('task_desc', '')[:100]}")
+            task = log.get("task_desc", "")[:100]
+            symptoms_lines.append(f"- 任务: {task}")
             for i, r in enumerate(log.get("reports", [])):
                 symptoms_lines.append(f"  优化{i+1}: analyzed={r['analyzed']} kept={r['kept']}")
+                # 检查是否有 Unknown tool 错误 → 优先判断工具不足
+            # 检查失败case中的error_msg
+            for case in log.get("cases", []):
+                err = case.get("error_msg", "")
+                if "Unknown tool" in err:
+                    unknown_tool_count += 1
+                    symptoms_lines.append(f"  [工具缺失] {err[:120]}")
 
         symptoms_text = "\n".join(symptoms_lines[-20:]) or "(无失败记录)"
+        gap_text = capability_gap or "Agent 无法完成需要多文件协调、复杂依赖或长上下文的任务"
+
+        # 快速判定：如果出现 Unknown tool 错误 → 直接判定为 tool_too_simple
+        if unknown_tool_count >= 1:
+            return {
+                "bottleneck_type": "tool_too_simple",
+                "target_file": "tools/builtin/__init__.py",
+                "rationale": f"Agent 多次尝试调用不存在的工具({unknown_tool_count}次)，当前工具集不足",
+                "capability_gap": gap_text,
+                "confidence": 0.95,
+            }
 
         arch_text = (
             "agent/loop.py: ReAct 循环 + 熔断 + 回路检测\n"
@@ -132,8 +162,6 @@ class ArchitectureBottleneckDetector:
             "tools/builtin/: read_file, write_file, run_shell, search_web 等\n"
             "agent/evolve/: 复盘反思 + 技能库 + 能力画像 + 挑战生成"
         )
-
-        gap_text = capability_gap or "Agent 无法完成需要多文件协调、复杂依赖或长上下文的任务"
 
         prompt = (BOTTLENECK_DIAGNOSIS_PROMPT
             .replace("{ symptoms }", symptoms_text)
@@ -230,6 +258,14 @@ class ArchitectureProposalGenerator:
             .replace("{ file_content }", file_content[-8000:])
             .replace("{ capability_gap }", bottleneck.get("capability_gap", "")))
 
+        # 追加工具生成规范提示
+        if "builtin" in file_path or bottleneck.get("bottleneck_type") == "tool_too_simple":
+            prompt += TOOL_GENERATION_HINT
+
+        system_msg = "你是一个 Agent 架构师。只输出 JSON，不要任何解释。"
+        if "tool_too_simple" == bottleneck.get("bottleneck_type"):
+            system_msg = "你是一个 Agent 工具开发专家。为 Agent 生成新的工具函数。只输出 JSON。"
+
         try:
             resp = self.llm.generate(
                 [Message(role="system", content="你是一个 Agent 架构师。只输出 JSON，不要任何解释。"),
@@ -264,13 +300,14 @@ class ArchitectureApplier:
     # 文件 → agent 组件属性映射
     COMPONENT_MAP = {
         "memory/short_term.py": ("memory", "short_term"),
-        "agent/loop.py": (None, None),  # loop 自身，需特殊处理
+        "tools/builtin/__init__.py": ("registry", None),  # 需重新注册所有工具
     }
 
     def __init__(self, backup_dir: str = "./arch_backups"):
         self.backup_dir = backup_dir
         os.makedirs(backup_dir, exist_ok=True)
         self.applied: list[dict] = []
+        self._pre_reload_functions: dict[str, str] = {}  # 保存旧函数源码用于回滚
 
     def backup(self, file_path: str) -> str:
         """备份文件"""
@@ -352,13 +389,21 @@ class ArchitectureApplier:
             if parent_attr and child_attr:
                 parent = getattr(agent_instance, parent_attr, None)
                 if parent and hasattr(parent, child_attr):
-                    # Recreate the component with updated code
                     old = getattr(parent, child_attr)
                     try:
                         new_instance = type(old)(max_tokens=old.max_tokens)
                         setattr(parent, child_attr, new_instance)
                     except Exception:
                         pass
+            elif parent_attr == "registry" and child_attr is None:
+                # Tools 文件被修改 → 重新注册所有工具
+                try:
+                    from tools.builtin import register_builtin_tools
+                    agent_instance.registry._tools.clear()
+                    agent_instance.registry._tool_metadata.clear()
+                    register_builtin_tools(agent_instance.registry)
+                except Exception:
+                    pass
 
         return True
 
