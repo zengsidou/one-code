@@ -66,9 +66,9 @@ class ChallengeGenerator:
         Returns:
             任务列表 [{task, category, difficulty, ...}]
         """
-        # 难度范围：当前级别到当前+2
+        # 难度范围：只生成当前级别 ±1 的任务，避免发必败题
         level_min = max(1, current_level)
-        level_max = min(5, current_level + 2)
+        level_max = min(5, current_level + 1)
         difficulty_range = f"{level_min} 到 {level_max}"
 
         weak_text = ", ".join(weak_areas) if weak_areas else "无明显弱项，全面发展"
