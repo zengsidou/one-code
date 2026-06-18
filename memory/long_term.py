@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
-"""长期记忆 — ChromaDB 向量检索 + Ollama bge-m3 Embedding"""
+"""长期记忆 — ChromaDB 向量检索 + any LLM embedding"""
 import hashlib
 import time
 
 import chromadb
 from chromadb.config import Settings
 
-from llm.ollama import OllamaClient
-
 
 class LongTermMemory:
-    def __init__(self, llm: OllamaClient, collection_name: str = "agent_memory", persist_dir: str = "./memory_db"):
+    def __init__(self, llm, collection_name: str = "agent_memory", persist_dir: str = "./memory_db"):
+        """Args:
+            llm: 任何实现了 embed(text) -> list[float] 的 LLM 适配器
+        """
         self.llm = llm
         self._client = chromadb.PersistentClient(
             path=persist_dir,

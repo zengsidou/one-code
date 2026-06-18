@@ -13,3 +13,7 @@ ability_profile.json
 meta_fix_history.json
 arch_backups/
 *.py-generated
+*.bak
+*.db
+test_*.json
+
