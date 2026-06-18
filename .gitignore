@@ -1,0 +1,9 @@
+chroma_data/
+memory_db/
+debug_db*/
+test_memory_db/
+test_db/
+__pycache__/
+*.pyc
+.env
+*.tmp
