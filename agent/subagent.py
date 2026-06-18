@@ -40,7 +40,7 @@ class SubAgent:
                     role="system",
                     content=(
                         "工具已返回结果。请直接引用以上结果给出简洁的最终中文回复，不要再调用工具。"
-                        f"\n工具返回的实际数据:\n{last_tool_result[:2000]}"
+                        f"\n工具返回的实际数据:\n{last_tool_result[:300]}"
                     ),
                 ))
 

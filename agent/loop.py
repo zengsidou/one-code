@@ -157,9 +157,8 @@ class AgentLoop:
                 context.append(Message(
                     role="system",
                     content=(
-                        "工具已返回结果。请直接引用以上结果给用户一个简洁的中文回复。"
-                        "不要说'根据之前的工具调用'、'可能包括'之类的模糊措辞，要引用实际数据。"
-                        f"\n工具返回的实际数据:\n{last_tool[:2000]}"
+                        "工具已返回结果。直接引用结果给用户简洁中文回复，不要模糊措辞。"
+                        f"\n工具返回:\n{last_tool[:300]}"
                     ),
                 ))
 
@@ -211,7 +210,9 @@ class AgentLoop:
         return f"[STOPPED] 达到最大迭代次数 ({self.max_steps})。"
 
     def _build_system_prompt(self) -> str:
-        tool_desc = self.registry.get_tools_description()
+        if not hasattr(self, "_cached_tool_desc"):
+            self._cached_tool_desc = self.registry.get_tools_description()
+        tool_desc = self._cached_tool_desc
         base = (
             f"{self.system_prompt}\n\n"
             "---\n"
@@ -503,26 +504,45 @@ class AgentLoop:
         """每次执行后复盘反思 + 沉淀技能 + 记录能力画像"""
         trace = "\n".join(self._step_trace[-15:]) if self._step_trace else "(无执行轨迹)"
         is_failure = "[STOPPED]" in result or "[ERROR]" in result
+        step_count = self._last_step_count
 
-        # 构建能力上下文
-        ability_ctx = "Agent 当前能力水平: "
-        if self._ability_profile and len(self._ability_profile.records) > 0:
-            stats = self._ability_profile.get_growth_summary(window=10)
-            ability_ctx += (
-                f"已完成 {stats['total_tasks']} 个任务，"
-                f"成功率 {stats['recent_success_rate']:.0%}，"
-                f"平均难度 {stats['recent_avg_diff']}/5，"
-                f"平均效率 {stats['recent_avg_efficiency']}/5"
-            )
+        # Token优化：轻量级任务跳过 LLM 复盘
+        if not is_failure and step_count <= 3 and len(trace) < 200:
+            reflection = {
+                "outcome": "success",
+                "difficulty_for_agent": 1,
+                "difficulty_evidence": "轻量任务，跳过深度复盘",
+                "what_worked": ["快速完成简单任务"],
+                "what_could_be_better": [],
+                "strategy_used": "直接执行",
+                "new_skill_gained": {"name": "", "description": "", "reusable": False, "trigger": "", "steps": ""},
+                "efficiency_score": 5,
+                "efficiency_evidence": "轻量任务",
+                "growth_insight": f"熟练完成: {task_desc[:60]}",
+                "task_desc": task_desc[:200],
+                "timestamp": "",
+                "result_preview": result[:100],
+            }
+            self._post_mortem.history.append(reflection)
         else:
-            ability_ctx += "这是 Agent 的早期任务，尚在建立基准。"
+            # 构建能力上下文
+            ability_ctx = "Agent 当前能力水平: "
+            if self._ability_profile and len(self._ability_profile.records) > 0:
+                stats = self._ability_profile.get_growth_summary(window=10)
+                ability_ctx += (
+                    f"已完成 {stats['total_tasks']} 个任务，"
+                    f"成功率 {stats['recent_success_rate']:.0%}，"
+                    f"平均难度 {stats['recent_avg_diff']}/5"
+                )
+            else:
+                ability_ctx += "这是 Agent 的早期任务，尚在建立基准。"
 
+            reflection = self._post_mortem.reflect(
+                task_desc, result, trace,
+                step_count=step_count,
+                ability_context=ability_ctx,
+            )
         # 1. 复盘
-        reflection = self._post_mortem.reflect(
-            task_desc, result, trace,
-            step_count=self._last_step_count,
-            ability_context=ability_ctx,
-        )
 
         # 2. 提取技能
         self._skill_library.add_from_post_mortem(reflection)

@@ -973,6 +973,8 @@ def test_evolve_post_mortem():
 def test_skill_library_add_query():
     import os
     lib_file = "./test_skill_lib.json"
+    if os.path.exists(lib_file):
+        os.remove(lib_file)
     lib = SkillLibrary(lib_file)
 
     # 添加技能
@@ -1010,7 +1012,7 @@ def test_skill_library_add_query():
     # to_prompt_hint
     hint = lib.to_prompt_hint(lib.query("bug"))
     assert "二分注释定位" in hint
-    assert "何时使用" in hint
+    assert "已学技能" in hint  # new format
 
     # stats
     stats = lib.get_stats()

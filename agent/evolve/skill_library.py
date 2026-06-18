@@ -147,14 +147,12 @@ class SkillLibrary:
             return None
 
     def to_prompt_hint(self, skills: list[dict]) -> str:
-        """将技能列表转换为可注入 system prompt 的提示文本"""
+        """技能提示（精简版）"""
         if not skills:
             return ""
-        lines = ["\n\n## 已学习的技能（可复用经验）\n"]
+        lines = ["\n\n## 已学技能\n"]
         for s in skills:
-            lines.append(f"- **{s['name']}** (强度:{s.get('strength',0.5):.1f})")
-            lines.append(f"  何时使用: {s.get('trigger', '')}")
-            lines.append(f"  操作步骤: {s.get('steps', '')}")
+            lines.append(f"- **{s['name']}**(强度{s.get('strength',0.5):.1f}): {s.get('trigger','')[:60]}")
         return "\n".join(lines)
 
     def get_top_skills(self, n: int = 3) -> list[dict]:
