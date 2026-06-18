@@ -13,12 +13,14 @@ from tools.registry import ToolRegistry
 from tools.builtin import register_builtin_tools
 from mcp.server import MCPServer
 from sandbox import SandboxPolicy, SafeExecutor
+from llm.ollama import OllamaClient
 
 
 def main():
     registry = ToolRegistry(safe_mode=True)
     sandbox = SafeExecutor(policy=SandboxPolicy())
-    register_builtin_tools(registry, sandbox=sandbox)
+    llm = OllamaClient(model="deepseek-r1:8b", embedding_model="bge-m3:latest")
+    register_builtin_tools(registry, sandbox=sandbox, llm=llm)
 
     server = MCPServer(
         registry=registry,

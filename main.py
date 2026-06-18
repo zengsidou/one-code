@@ -50,7 +50,7 @@ def main():
     llm = OllamaClient(model="deepseek-r1:8b", embedding_model="bge-m3:latest")
     registry = ToolRegistry(safe_mode=True)
     sandbox = SafeExecutor(policy=SandboxPolicy())
-    register_builtin_tools(registry, sandbox=sandbox)
+    register_builtin_tools(registry, sandbox=sandbox, llm=llm)
     short_mem = ShortTermMemory(max_tokens=4096)
     long_mem = LongTermMemory(llm, persist_dir="./chroma_data")
     memory = MemoryManager(short=short_mem, long=long_mem)
