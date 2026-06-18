@@ -13,24 +13,42 @@ from agent.models import Message
 POST_MORTEM_PROMPT = """你是一位资深代码工程 mentor。分析以下 Agent 完成代码任务的过程，
 进行深度复盘。Agent 的目标是成长为更优秀的代码工程师。
 
+## Agent 当前能力水平
+{ ability_context }
+
 ## 任务描述
 {task_desc}
 
 ## 执行结果
-{result_status} | 最终输出: {result_preview}
+{result_status} | 步数: {step_count} | 最终输出: {result_preview}
 
 ## 执行过程
 {execution_trace}
+
+## 难度评分标准（基于客观指标）
+- 1: 单文件，≤3步完成
+- 2: 单文件，4-8步完成；或多文件但≤4步
+- 3: 2-3个文件，5-12步完成
+- 4: 4+个文件或多模块架构，10-18步
+- 5: 需要跨系统集成或Agent无法在当前能力下完成
+
+## 效率评分标准
+- 1: 严重冗余，错误后盲重试≥3次
+- 2: 有冗余操作，重复调用相同工具
+- 3: 路径基本正确，偶有重复
+- 4: 路径高效，无重复操作
+- 5: 最优路径，每个文件一次写入成功
 
 ## 复盘要求
 输出严格 JSON，只输出 JSON 对象，不要任何解释。
 
 {
   "outcome": "success 或 failure",
-  "difficulty_for_agent": 1-5 (1=毫不费力, 5=超出当前能力),
+  "difficulty_for_agent": 1-5 (严格按上述标准评分),
+  "difficulty_evidence": "简要说明为什么给这个难度分",
   "what_worked": ["做得好的地方"],
   "what_could_be_better": ["即使成功了，哪里还能更好？如果失败了，本质缺什么能力？"],
-  "strategy_used": "这次用什么策略解决问题（如：二分搜索定位bug、先读后改、最小改动原则等）",
+  "strategy_used": "这次用什么策略解决问题",
   "new_skill_gained": {
     "name": "新技能名称（简短）",
     "description": "技能描述",
@@ -38,7 +56,8 @@ POST_MORTEM_PROMPT = """你是一位资深代码工程 mentor。分析以下 Age
     "trigger": "什么情况下可以用这个技能",
     "steps": "这个技能的操作步骤"
   },
-  "efficiency_score": 1-5 (1=冗余步骤多, 5=最简路径),
+  "efficiency_score": 1-5 (严格按上述标准评分),
+  "efficiency_evidence": "简要说明为什么给这个效率分",
   "growth_insight": "一句话：这次经历让 Agent 成长了什么"
 }
 """
@@ -60,23 +79,23 @@ class TaskPostMortem:
         task_desc: str,
         result: str,
         execution_trace: str,
+        step_count: int = 0,
+        ability_context: str = "",
     ) -> dict:
-        """复盘一次任务执行
-
-        Args:
-            task_desc: 任务描述
-            result: 最终结果文本
-            execution_trace: 执行过程（步骤、工具调用、输出摘要）
-
-        Returns:
-            复盘报告 dict，包含 what_worked/what_could_be_better/strategy/new_skill 等
-        """
+        """复盘一次任务执行"""
         is_failure = "[STOPPED]" in result or "[ERROR]" in result
         result_status = "FAILED" if is_failure else "SUCCESS"
         result_preview = result[:500]
+        ctx = ability_context or "Agent 是一个代码工程助手，正在持续成长中。"
+
+        # 从执行轨迹粗略统计文件数和步数
+        file_count = execution_trace.count("write_file") + execution_trace.count("call write_file")
+        file_count = max(1, file_count)
 
         prompt = (POST_MORTEM_PROMPT
+            .replace("{ ability_context }", ctx)
             .replace("{task_desc}", task_desc[:500])
+            .replace("{step_count}", f"{step_count}步, 涉及{file_count}个文件")
             .replace("{result_status}", result_status)
             .replace("{result_preview}", result_preview)
             .replace("{execution_trace}", execution_trace[:2000]))

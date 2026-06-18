@@ -86,6 +86,8 @@ class AgentLoop:
         self.enable_evolution = enable_evolution
         self._post_mortem = TaskPostMortem(self.llm) if enable_evolution else None
         self._skill_library = SkillLibrary(skill_library_file) if enable_evolution else None
+        if self._skill_library:
+            self._skill_library.set_llm(self.llm)
         self._ability_profile = AbilityProfile(ability_profile_file) if enable_evolution else None
         self._challenge_gen = ChallengeGenerator(self.llm) if enable_evolution else None
         self._arch_bottleneck = ArchitectureBottleneckDetector(self.llm) if enable_evolution else None
@@ -485,8 +487,25 @@ class AgentLoop:
         trace = "\n".join(self._step_trace[-15:]) if self._step_trace else "(无执行轨迹)"
         is_failure = "[STOPPED]" in result or "[ERROR]" in result
 
+        # 构建能力上下文
+        ability_ctx = "Agent 当前能力水平: "
+        if self._ability_profile and len(self._ability_profile.records) > 0:
+            stats = self._ability_profile.get_growth_summary(window=10)
+            ability_ctx += (
+                f"已完成 {stats['total_tasks']} 个任务，"
+                f"成功率 {stats['recent_success_rate']:.0%}，"
+                f"平均难度 {stats['recent_avg_diff']}/5，"
+                f"平均效率 {stats['recent_avg_efficiency']}/5"
+            )
+        else:
+            ability_ctx += "这是 Agent 的早期任务，尚在建立基准。"
+
         # 1. 复盘
-        reflection = self._post_mortem.reflect(task_desc, result, trace)
+        reflection = self._post_mortem.reflect(
+            task_desc, result, trace,
+            step_count=self._last_step_count,
+            ability_context=ability_ctx,
+        )
 
         # 2. 提取技能
         self._skill_library.add_from_post_mortem(reflection)

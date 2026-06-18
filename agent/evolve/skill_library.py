@@ -10,15 +10,11 @@ from datetime import datetime
 
 
 class SkillLibrary:
-    """Agent 能力库
-
-    存储从任务复盘中提取的可复用技能、策略、代码模式。
-    支持查询、强化、衰减，模拟"记忆+遗忘"机制。
-    """
-
     def __init__(self, filepath: str = "./skill_library.json"):
         self.filepath = filepath
         self.skills: list[dict] = []
+        self._llm = None
+        self._embeddings: dict[int, list[float]] = {}
         self._load()
 
     def _load(self):
@@ -83,28 +79,72 @@ class SkillLibrary:
             s["strength"] = max(min_strength, s.get("strength", 0.5) - decay_rate)
         self._save()
 
+    def set_llm(self, llm):
+        """设置LLM适配器，启用embedding相似度匹配"""
+        self._llm = llm
+
     def query(self, task_desc: str, top_k: int = 3, min_strength: float = 0.2) -> list[dict]:
-        """根据任务描述查询相关技能
-
-        Args:
-            task_desc: 新任务描述
-            top_k: 返回前 K 个最相关技能
-            min_strength: 最低强度阈值
-
-        Returns:
-            相关技能列表，按相关性+强度降序
-        """
-        keywords = set(task_desc.lower().split())
+        """根据任务描述查询相关技能 — 优先用embedding相似度，fallback到关键词"""
         scored = []
-        for s in self.skills:
+        use_embedding = self._llm is not None
+
+        if use_embedding:
+            query_emb = self._get_embedding(task_desc[:200])
+
+        for i, s in enumerate(self.skills):
             if s.get("strength", 0.5) < min_strength:
                 continue
-            text = f"{s['name']} {s.get('description', '')} {s.get('trigger', '')}".lower()
-            score = sum(1 for kw in keywords if kw in text)
-            if score > 0:
-                scored.append((score + s.get("strength", 0.5), s))
+
+            if use_embedding and query_emb:
+                # Compute or reuse embedding for this skill
+                if i not in self._embeddings:
+                    skill_text = f"{s['name']} {s.get('description','')} {s.get('trigger','')}"[:200]
+                    emb = self._get_embedding(skill_text)
+                    if emb:
+                        self._embeddings[i] = emb
+                skill_emb = self._embeddings.get(i)
+                if skill_emb:
+                    sim = self._cosine_similarity(query_emb, skill_emb)
+                    if sim > 0.3:
+                        scored.append((sim + s.get("strength", 0.5) * 0.3, s))
+                else:
+                    # Fallback to keyword for this skill
+                    self._keyword_score(task_desc, s, scored)
+            else:
+                self._keyword_score(task_desc, s, scored)
+
         scored.sort(key=lambda x: -x[0])
         return [s[1] for s in scored[:top_k]]
+
+    @staticmethod
+    def _keyword_score(task_desc: str, skill: dict, scored: list):
+        keywords = set(task_desc.lower().split())
+        text = f"{skill['name']} {skill.get('description','')} {skill.get('trigger','')}".lower()
+        kw_hits = sum(1 for kw in keywords if kw in text)
+        # Also check bigrams for better phrase matching
+        words = task_desc.lower().split()
+        bigrams = set(f"{words[i]} {words[i+1]}" for i in range(len(words)-1))
+        bg_hits = sum(1 for bg in bigrams if bg in text)
+        score = kw_hits + bg_hits * 2
+        if score > 0:
+            scored.append((score + skill.get("strength", 0.5), skill))
+
+    @staticmethod
+    def _cosine_similarity(a: list[float], b: list[float]) -> float:
+        if not a or not b:
+            return 0.0
+        dot = sum(x*y for x,y in zip(a,b))
+        norm_a = sum(x*x for x in a) ** 0.5
+        norm_b = sum(x*x for x in b) ** 0.5
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
+
+    def _get_embedding(self, text: str) -> list[float] | None:
+        try:
+            return self._llm.embed(text)
+        except Exception:
+            return None
 
     def to_prompt_hint(self, skills: list[dict]) -> str:
         """将技能列表转换为可注入 system prompt 的提示文本"""
