@@ -176,6 +176,17 @@ class ArchitectureBottleneckDetector:
                 "capability_gap": gap_text,
                 "confidence": 0.95,
             }
+
+        # 快速判定：大量 delegate_task 调用 → single_agent_limit
+        delegate_count = tool_call_patterns.get("delegate_task", 0)
+        if delegate_count >= 3:
+            return {
+                "bottleneck_type": "single_agent_limit",
+                "target_file": "agent/loop.py",
+                "rationale": f"Agent 多次尝试委派子任务({delegate_count}次)但始终无法完成，单Agent无法处理大规模并行工作",
+                "capability_gap": gap_text,
+                "confidence": 0.90,
+            }
         
         # 快速判定：仅1个工具失败大量+大量ERROR → no_execution_loop
         if (len(tool_call_patterns) <= 2 
