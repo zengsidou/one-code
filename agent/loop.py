@@ -1,12 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Agent Loop — ReAct 循环 + 熔断 + 循环检测"""
+"""Agent Loop — ReAct 循环 + 熔断 + 循环检测 + 自优化闭环"""
 import hashlib
 import json
+import os
+from typing import Any
 
 from agent.models import Message, AgentState, StepResult
 from llm.base import BaseLLM
+from llm.deepseek_api import DeepSeekAdapter
+from llm.ollama import OllamaClient
 from tools.registry import ToolRegistry
 from memory import MemoryManager
+from agent.diagnosis import FailureDiagnosis
+from agent.root_cause import RootCauseAnalyzer
+from agent.self_repair import SelfRepair
+from agent.verify import VerifyRepair
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -23,14 +31,26 @@ DEFAULT_SYSTEM_PROMPT = (
 class AgentLoop:
     def __init__(
         self,
-        llm: BaseLLM,
-        registry: ToolRegistry,
-        memory: MemoryManager,
+        llm: BaseLLM | None = None,
+        registry: ToolRegistry | None = None,
+        memory: MemoryManager | None = None,
         system_prompt: str = "",
         max_steps: int = 20,
+        enable_self_optimize: bool = False,
+        llm_type: str = "deepseek",
+        deepseek_api_key: str | None = None,
     ):
-        self.llm = llm
-        self.registry = registry
+        if llm is not None:
+            self.llm = llm
+        elif llm_type == "deepseek":
+            api_key = deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY", "")
+            self.llm = DeepSeekAdapter(api_key=api_key)
+        elif llm_type == "ollama":
+            self.llm = OllamaClient()
+        else:
+            raise ValueError(f"Unknown llm_type: {llm_type}")
+
+        self.registry = registry or ToolRegistry()
         self.memory = memory
         self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self.max_steps = max_steps
@@ -38,9 +58,18 @@ class AgentLoop:
         self._error_count = 0
         self._max_errors = 5
 
+        self.enable_self_optimize = enable_self_optimize
+        self._diagnosis = FailureDiagnosis() if enable_self_optimize else None
+        self._root_cause_analyzer = RootCauseAnalyzer(self.llm) if enable_self_optimize else None
+        self._self_repair = SelfRepair(self.llm) if enable_self_optimize else None
+        self._verify = VerifyRepair() if enable_self_optimize else None
+        self._last_failure_cases: list[dict] = []
+
     def run(self, user_input: str, debug: bool = False) -> str:
         self._tool_fingerprints.clear()
         self._error_count = 0
+        if self.enable_self_optimize:
+            self._last_failure_cases.clear()
         self.memory.add_message(Message(role="user", content=user_input))
 
         for step in range(self.max_steps):
@@ -76,6 +105,14 @@ class AgentLoop:
                 if self._detect_tool_loop(tool_calls, debug):
                     content = response.content or ""
                     self.memory.add_message(Message(role="assistant", content=content))
+
+                    if self.enable_self_optimize:
+                        self._capture_failure(
+                            user_input, step,
+                            "[STOPPED] 检测到重复工具调用回路，已中断",
+                            "loop_detected",
+                        )
+
                     summary = self._force_summarize()
                     return summary if summary else f"[STOPPED] 检测到重复工具调用回路，已中断。"
 
@@ -94,6 +131,12 @@ class AgentLoop:
                     if result.startswith("[ERROR]"):
                         self._error_count += 1
                         if self._error_count >= self._max_errors:
+                            if self.enable_self_optimize:
+                                self._capture_failure(
+                                    user_input, step,
+                                    f"[STOPPED] 连续错误达到上限 ({self._max_errors})，已熔断。最后错误: {result}",
+                                    "circuit_breaker",
+                                )
                             return f"[STOPPED] 连续错误达到上限 ({self._max_errors})，已熔断。最后错误: {result}"
 
                 continue
@@ -157,3 +200,116 @@ class AgentLoop:
             return resp.content or result
         except Exception:
             return result
+
+    # ─── 自优化闭环 ─────────────────────────────────────
+
+    def _capture_failure(self, task_desc: str, step: int, error_msg: str, error_type: str):
+        """捕获执行失败信息"""
+        if self._diagnosis is None:
+            return
+        snapshot = list(self.memory.short_term.get_messages())
+        case = self._diagnosis.capture_failure(
+            task_desc=task_desc,
+            step=step,
+            error_msg=error_msg,
+            context_snapshot=snapshot,
+            error_type=error_type,
+        )
+        self._last_failure_cases.append(case)
+
+    def run_self_optimize(self, failure_cases: list[dict] | None = None) -> dict:
+        """执行自优化闭环：根因分析 → 生成修复 → 应用修复 → 验证 → 保留或回滚
+
+        Args:
+            failure_cases: 失败 case 列表，如为 None 则使用上次 run() 捕获的 cases
+
+        Returns:
+            自优化报告 dict:
+            {total_cases, analyzed, fixes_generated, fixes_applied, fixes_kept,
+             fixes_rolled_back, details: [...]}
+        """
+        if not self.enable_self_optimize:
+            return {"message": "自优化未启用 (enable_self_optimize=False)", "total_cases": 0}
+
+        cases = failure_cases or self._last_failure_cases
+        if not cases:
+            return {"message": "没有失败 cases 可分析", "total_cases": 0}
+
+        report = {
+            "total_cases": len(cases),
+            "analyzed": 0,
+            "fixes_generated": 0,
+            "fixes_applied": 0,
+            "fixes_kept": 0,
+            "fixes_rolled_back": 0,
+            "details": [],
+        }
+
+        current_config = {
+            "system_prompt": self.system_prompt,
+            "tool_descriptions": {
+                name: meta.get("description", "")
+                for name, meta in self.registry._tool_metadata.items()
+            },
+            "memory_max_tokens": self.memory.short_term.max_tokens
+            if hasattr(self.memory, "short_term") else 4096,
+            "model_name": getattr(self.llm, "model", "unknown"),
+        }
+
+        for case in cases:
+            detail = {"case_id": case.get("id", "?"), "task": case.get("task_desc", "")[:80]}
+
+            # 1. 根因分析
+            root_cause = self._root_cause_analyzer.analyze(case)
+            detail["root_cause"] = root_cause.get("root_cause_type", "?")
+            detail["confidence"] = root_cause.get("confidence", 0)
+            report["analyzed"] += 1
+
+            # 跳过低置信度
+            if root_cause.get("confidence", 0) < 0.4:
+                detail["action"] = "skipped_low_confidence"
+                detail["message"] = f"置信度 {root_cause.get('confidence', 0):.1f} < 0.4，跳过"
+                report["details"].append(detail)
+                continue
+
+            # 跳过需人工介入的类型
+            if root_cause.get("suggested_fix_type") in ("fix_tool_code", "switch_model"):
+                detail["action"] = "skipped_requires_manual"
+                detail["message"] = "需人工介入"
+                report["details"].append(detail)
+                continue
+
+            # 2. 生成修复
+            fix = self._self_repair.generate_fix(root_cause, current_config)
+            detail["fix_type"] = fix.get("fix_type", "?")
+            report["fixes_generated"] += 1
+
+            # 3. 应用修复
+            applied = self._self_repair.apply_fix(fix, self)
+            detail["applied"] = applied
+
+            if not applied:
+                detail["action"] = "apply_failed"
+                report["details"].append(detail)
+                continue
+
+            report["fixes_applied"] += 1
+
+            # 4. 验证
+            task = case.get("task_desc", "")
+            verify_result = self._verify.verify(fix, self, task)
+            detail["after_success"] = verify_result.get("after_success", False)
+            detail["after_message"] = verify_result.get("after_message", "")[:100]
+
+            # 5. 保留或回滚
+            if verify_result.get("improved", False):
+                detail["action"] = "kept"
+                report["fixes_kept"] += 1
+            else:
+                self._self_repair.rollback(fix, self)
+                detail["action"] = "rolled_back"
+                report["fixes_rolled_back"] += 1
+
+            report["details"].append(detail)
+
+        return report
