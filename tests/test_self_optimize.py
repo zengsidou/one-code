@@ -1263,6 +1263,93 @@ def test_arch_validator():
     print("  [PASS] test_arch_validator")
 
 
+# ─── P0 测试 25: TokenCounter 准确计数 ──────────────────────────
+
+def test_p0_token_counter():
+    from memory.token_counter import TokenCounter
+
+    tc = TokenCounter()
+    
+    # 英文
+    eng = tc.count("hello world this is a test")
+    assert 5 <= eng <= 10, f"Expected ~7, got {eng}"
+    
+    # 中文
+    zh = tc.count("你好世界")
+    assert 2 <= zh <= 8, f"Expected ~4-6, got {zh}"
+    
+    # 空文本
+    assert tc.count("") == 0
+    
+    # 混合
+    mixed = tc.count("hello 世界 test")
+    assert mixed > 3, f"Expected >3, got {mixed}"
+    
+    # 消息计数
+    from agent.models import Message
+    msgs = [
+        Message(role="system", content="You are helpful"),
+        Message(role="user", content="hello"),
+    ]
+    msg_tokens = tc.count_messages(msgs)
+    assert msg_tokens > 5, f"Expected >5, got {msg_tokens}"
+
+    print("  [PASS] test_p0_token_counter")
+
+
+# ─── P0 测试 26: ShortTermMemory 智能摘要 ────────────────────────
+
+def test_p0_smart_summarize():
+    from memory.short_term import ShortTermMemory
+    from agent.models import Message, ToolCall
+
+    # 低 token 限制迫使摘要触发
+    mem = ShortTermMemory(max_tokens=100, max_messages=50)
+    
+    # 加入多对对话
+    for i in range(10):
+        mem.add(Message(role="user", content=f"question {i} " + "x" * 20))
+        mem.add(Message(role="assistant", content=f"answer {i} " + "y" * 20))
+    
+    msgs = mem.get_messages()
+    
+    # 验证：消息总 token 应 ≤ max_tokens 附近
+    total = mem.get_token_count()
+    assert total <= 120, f"Token count {total} should be around max_tokens"
+
+    # 验证：摘要消息存在
+    summary_msgs = [m for m in msgs if "[对话摘要]" in (m.content or "")]
+    assert len(summary_msgs) > 0, "Should have summary messages after compression"
+
+    # 验证：仍保留了最新消息（未压缩）
+    assert "question 9" in msgs[-2].content
+    assert "answer 9" in msgs[-1].content
+
+    # 工具链不被破坏
+    mem2 = ShortTermMemory(max_tokens=5000, max_messages=50)
+    mem2.add(Message(role="user", content="do task"))
+    mem2.add(Message(role="assistant", content="calling tool", tool_calls=[
+        ToolCall(id="c1", name="test", arguments={"x": "1"})
+    ]))
+    mem2.add(Message(role="tool", content="result", tool_call_id="c1", tool_name="test"))
+    mem2.add(Message(role="assistant", content="final answer"))
+    
+    msgs2 = mem2.get_messages()
+    # 工具链应保持完整
+    tool_msgs = [m for m in msgs2 if m.role == "tool"]
+    assert len(tool_msgs) == 1, "Tool message should still be present"
+    # assistant with tool_calls 应在 tool 之前
+    tc_idx = next(i for i, m in enumerate(msgs2) if getattr(m, "tool_calls", None))
+    tool_idx = next(i for i, m in enumerate(msgs2) if m.role == "tool")
+    assert tc_idx < tool_idx, "Assistant with tool_calls should precede tool message"
+
+    # 空记忆 clear
+    mem2.clear()
+    assert len(mem2) == 0
+
+    print("  [PASS] test_p0_smart_summarize")
+
+
 if __name__ == "__main__":
     print("Running Self-Optimize tests...\n")
     test_deepseek_adapter()
@@ -1289,4 +1376,6 @@ if __name__ == "__main__":
     test_arch_proposal_generator()
     test_arch_applier()
     test_arch_validator()
+    test_p0_token_counter()
+    test_p0_smart_summarize()
     print("\nAll self-optimize tests passed!")

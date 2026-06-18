@@ -2,6 +2,7 @@
 """记忆管理"""
 from .short_term import ShortTermMemory
 from .long_term import LongTermMemory
+from .token_counter import TokenCounter
 from agent.models import Message
 
 
