@@ -219,10 +219,10 @@ class AgentLoop:
             "工具调用时输出严格 JSON: "
             '{"tool": "工具名", "arguments": {"参数名": "参数值"}}'
         )
-        # 注入已学技能
+        # 注入已学技能 — 总是注入最强的3个（embedding为0时query无效）
         if self.enable_evolution and self._skill_library:
-            skills = self._skill_library.query("", top_k=3)
-            hint = self._skill_library.to_prompt_hint(skills)
+            top_skills = self._skill_library.get_top_skills(3)
+            hint = self._skill_library.to_prompt_hint(top_skills)
             if hint:
                 base += hint
         return base
@@ -540,7 +540,7 @@ class AgentLoop:
 
         # 4. 软失败检测：复盘弱点重复出现 → 触发进化链
         if self._arch_bottleneck:
-            pattern = self._post_mortem.detect_repeating_weakness(min_occurrences=3, window=5)
+            pattern = self._post_mortem.detect_repeating_weakness(min_occurrences=2, window=8)
             if pattern:
                 self._arch_bottleneck.record_failure(
                     task_desc=f"[SOFT-FAIL] {pattern['pattern']}",

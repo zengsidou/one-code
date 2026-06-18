@@ -128,17 +128,17 @@ class ChallengeGenerator:
         recent_diff = summary.get("recent_avg_diff", 2)
         overall_diff = summary.get("overall_avg_diff", 2)
 
-        # 近期成功率 > 80% 且难度持平或上升 → 升级
-        if recent_rate >= 0.8 and recent_diff >= overall_diff:
+        # 近期成功率 > 70% → 升级
+        if recent_rate >= 0.7 and summary["total_tasks"] >= 4:
             return {
                 "action": "upgrade",
                 "current_level": recent_diff,
                 "suggested_level": min(5, int(recent_diff + 1)),
-                "reason": f"近期成功率{recent_rate:.0%}且难度稳定，可以挑战更高难度",
+                "reason": f"近期成功率{recent_rate:.0%}，可以挑战更高难度",
             }
 
-        # 近期成功率 < 50% → 降低难度
-        if recent_rate < 0.5 and summary["total_tasks"] >= 5:
+        # 近期成功率 < 40% → 降级
+        if recent_rate < 0.4 and summary["total_tasks"] >= 4:
             return {
                 "action": "consolidate",
                 "current_level": recent_diff,

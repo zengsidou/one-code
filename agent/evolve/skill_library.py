@@ -157,6 +157,11 @@ class SkillLibrary:
             lines.append(f"  操作步骤: {s.get('steps', '')}")
         return "\n".join(lines)
 
+    def get_top_skills(self, n: int = 3) -> list[dict]:
+        """获取强度最高的 N 个技能（不依赖查询匹配）"""
+        sorted_skills = sorted(self.skills, key=lambda s: s.get("strength", 0.5), reverse=True)
+        return sorted_skills[:n]
+
     def get_stats(self) -> dict:
         """获取能力库统计"""
         return {
