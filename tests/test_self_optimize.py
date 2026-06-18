@@ -11,6 +11,7 @@ from agent.diagnosis import FailureDiagnosis
 from agent.root_cause import RootCauseAnalyzer
 from agent.self_repair import SelfRepair
 from agent.verify import VerifyRepair
+from agent.fix_history import FixHistory
 from agent.loop import AgentLoop, DEFAULT_SYSTEM_PROMPT
 from tools.registry import ToolRegistry
 from memory import MemoryManager
@@ -522,6 +523,210 @@ def test_integration_self_optimize():
     print("  [PASS] test_integration_self_optimize")
 
 
+# ─── 测试 9: 自动触发自优化 + 重试 ──────────────────────────────
+
+def test_auto_self_heal():
+    """测试 run() 熔断时自动触发自优化并重试"""
+    from unittest.mock import patch
+
+    registry = ToolRegistry(safe_mode=False)
+
+    call_count = [0]
+
+    @registry.register("failer", "Always fails")
+    def failer(x: str = "test") -> str:
+        call_count[0] += 1
+        return f"[ERROR] fail #{call_count[0]}"
+
+    # Mock LLM：先返回工具调用导致熔断，修复后返回成功
+    class SelfHealMockLLM(BaseLLM):
+        def __init__(self):
+            self.model = "mock"
+            self.call_idx = 0
+            self.mode = "fail"  # fail → success after heal
+
+        def generate(self, messages, tools=None):
+            if self.mode == "fail":
+                if tools:
+                    self.call_idx += 1
+                    if self.call_idx <= 6:
+                        return Message(
+                            role="assistant", content="call failer",
+                            tool_calls=[ToolCall(id=f"c{self.call_idx}", name="failer",
+                                         arguments={"x": f"a{self.call_idx}"})],
+                        )
+            # After heal or directly
+            return Message(role="assistant", content="任务成功完成！", tool_calls=None)
+
+        def embed(self, text):
+            return [0.0]
+
+    llm = SelfHealMockLLM()
+
+    # 用 mock root_cause_analyzer 让它返回一个可修复的诊断
+    agent = AgentLoop(
+        llm=llm,
+        registry=registry,
+        memory=_make_memory(),
+        max_steps=15,
+        enable_self_optimize=True,
+        self_optimize_max_retries=2,
+        fix_history_file="./test_fix_history_auto.json",
+    )
+
+    # Mock root_cause_analyzer.analyze to return a fixable result
+    with patch.object(agent._root_cause_analyzer, "analyze", return_value={
+        "root_cause_type": "prompt_unclear",
+        "confidence": 0.85,
+        "detail": "提示词不清晰",
+        "suggested_fix_type": "adjust_prompt",
+        "fix_description": "改进提示词",
+    }):
+        # Mock _self_repair.generate_fix to return a simple fix
+        with patch.object(agent._self_repair, "generate_fix", return_value={
+            "fix_id": "fix_auto",
+            "fix_type": "adjust_prompt",
+            "original": {"system_prompt": agent.system_prompt},
+            "fixed": {"system_prompt": agent.system_prompt + "\n改进后的提示"},
+            "applied": False,
+        }):
+            # Run — should auto-heal
+            result = agent.run("test auto heal")
+
+    # 应该重试成功
+    assert "任务成功完成" in result or "[STOPPED]" not in result, f"Expected success after heal, got: {result[:80]}"
+
+    print("  [PASS] test_auto_self_heal")
+
+
+# ─── 测试 10: FixHistory 持久化与复用 ────────────────────────────
+
+def test_fix_history_persistence():
+    history_file = "./test_fh_persist.json"
+
+    # 创建并记录修复
+    fh = FixHistory(history_file)
+    fh.record_fix(
+        error_type="circuit_breaker",
+        task_desc="读取大文件并分析内容",
+        fix={"fix_type": "trim_context", "original": {}, "fixed": {"memory_max_tokens": 2000}},
+        root_cause={"root_cause_type": "context_overflow", "confidence": 0.9},
+        verified=True,
+    )
+    fh.record_fix(
+        error_type="loop_detected",
+        task_desc="搜索数据库记录",
+        fix={"fix_type": "adjust_prompt", "original": {}, "fixed": {"system_prompt": "Improved"}},
+        root_cause={"root_cause_type": "prompt_unclear", "confidence": 0.85},
+        verified=True,
+    )
+    assert len(fh.records) == 2
+
+    # 查找相似
+    similar = fh.find_similar("circuit_breaker", "读取文件内容")
+    assert len(similar) > 0, "Should find similar fix for circuit_breaker"
+    assert similar[0]["fix"]["fix_type"] == "trim_context"
+
+    similar2 = fh.find_similar("loop_detected", "搜索数据库")
+    assert len(similar2) > 0, "Should find similar fix for loop_detected"
+
+    # 不相似的查询
+    no_match = fh.find_similar("tool_error", "完全不相关的任务描述")
+    assert len(no_match) == 0, "Should not match unrelated error"
+
+    # 关闭后重新加载
+    del fh
+    fh2 = FixHistory(history_file)
+    assert len(fh2.records) == 2
+    assert fh2.records[0]["fix"]["fix_type"] == "trim_context"
+
+    # mark_reused
+    fh2.mark_reused(fh2.records[0]["fix"])
+    assert fh2.records[0]["reuse_count"] == 1
+
+    # stats
+    stats = fh2.get_stats()
+    assert stats["total_fixes"] == 2
+    assert "trim_context" in stats["by_fix_type"]
+
+    # cleanup
+    import os
+    os.remove(history_file)
+
+    print("  [PASS] test_fix_history_persistence")
+
+
+# ─── 测试 11: 跨会话修复复用 ─────────────────────────────────────
+
+def test_cross_session_reuse():
+    """测试 AgentLoop 在遇到已知失败模式时优先复用历史修复"""
+    history_file = "./test_fh_reuse.json"
+    import os
+
+    # 先写入历史修复
+    fh = FixHistory(history_file)
+    fh.record_fix(
+        error_type="circuit_breaker",
+        task_desc="读取复杂文件",
+        fix={"fix_type": "adjust_prompt", "original": {}, "fixed": {"system_prompt": "历史优化过的提示词"}},
+        root_cause={"root_cause_type": "prompt_unclear", "confidence": 0.88},
+        verified=True,
+    )
+
+    registry = ToolRegistry(safe_mode=False)
+
+    @registry.register("failer", "Always fails")
+    def failer(x: str = "test") -> str:
+        return "[ERROR] fail"
+
+    class ReuseLLM(BaseLLM):
+        def __init__(self):
+            self.model = "mock"
+            self.call_idx = 0
+
+        def generate(self, messages, tools=None):
+            if tools:
+                self.call_idx += 1
+                if self.call_idx <= 6:
+                    return Message(
+                        role="assistant", content="call failer",
+                        tool_calls=[ToolCall(id=f"c{self.call_idx}", name="failer",
+                                     arguments={"x": f"u{self.call_idx}"})],
+                    )
+            return Message(role="assistant", content="修复后成功完成！", tool_calls=None)
+
+        def embed(self, text):
+            return [0.0]
+
+    agent = AgentLoop(
+        llm=ReuseLLM(),
+        registry=registry,
+        memory=_make_memory(),
+        max_steps=15,
+        enable_self_optimize=True,
+        self_optimize_max_retries=2,
+        fix_history_file=history_file,
+    )
+
+    # 先用 _try_reuse_historical_fixes 验证历史修复被检测到
+    agent._last_failure_cases.append({
+        "id": "test_case",
+        "task_desc": "读取复杂文件进行解析",
+        "failed_step": 3,
+        "error_type": "circuit_breaker",
+        "error_msg": "circuit breaker",
+        "context_snapshot": [],
+    })
+    agent._try_reuse_historical_fixes()
+    # 验证历史修复被应用
+    assert agent.system_prompt == "历史优化过的提示词", f"Expected reused prompt, got: {agent.system_prompt[:30]}"
+
+    # cleanup
+    os.remove(history_file)
+
+    print("  [PASS] test_cross_session_reuse")
+
+
 if __name__ == "__main__":
     print("Running Self-Optimize tests...\n")
     test_deepseek_adapter()
@@ -532,4 +737,7 @@ if __name__ == "__main__":
     test_verify_repair()
     test_self_optimize_disabled()
     test_integration_self_optimize()
+    test_auto_self_heal()
+    test_fix_history_persistence()
+    test_cross_session_reuse()
     print("\nAll self-optimize tests passed!")

@@ -5,3 +5,4 @@ from .diagnosis import FailureDiagnosis
 from .root_cause import RootCauseAnalyzer
 from .self_repair import SelfRepair
 from .verify import VerifyRepair
+from .fix_history import FixHistory

@@ -15,6 +15,7 @@ from agent.diagnosis import FailureDiagnosis
 from agent.root_cause import RootCauseAnalyzer
 from agent.self_repair import SelfRepair
 from agent.verify import VerifyRepair
+from agent.fix_history import FixHistory
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -39,6 +40,8 @@ class AgentLoop:
         enable_self_optimize: bool = False,
         llm_type: str = "deepseek",
         deepseek_api_key: str | None = None,
+        self_optimize_max_retries: int = 2,
+        fix_history_file: str = "./fix_history.json",
     ):
         if llm is not None:
             self.llm = llm
@@ -59,18 +62,33 @@ class AgentLoop:
         self._max_errors = 5
 
         self.enable_self_optimize = enable_self_optimize
+        self.self_optimize_max_retries = self_optimize_max_retries
         self._diagnosis = FailureDiagnosis() if enable_self_optimize else None
         self._root_cause_analyzer = RootCauseAnalyzer(self.llm) if enable_self_optimize else None
         self._self_repair = SelfRepair(self.llm) if enable_self_optimize else None
         self._verify = VerifyRepair() if enable_self_optimize else None
+        self._fix_history = FixHistory(fix_history_file) if enable_self_optimize else None
         self._last_failure_cases: list[dict] = []
+        self._self_optimize_retry_count = 0
+        self._last_optimize_report: dict = {}
 
     def run(self, user_input: str, debug: bool = False) -> str:
         self._tool_fingerprints.clear()
         self._error_count = 0
+        self._self_optimize_retry_count = 0
         if self.enable_self_optimize:
             self._last_failure_cases.clear()
         self.memory.add_message(Message(role="user", content=user_input))
+
+        result = self._run_loop(user_input, debug)
+        if "[STOPPED]" in result and self.enable_self_optimize:
+            result = self._try_self_heal(user_input, debug)
+        return result
+
+    def _run_loop(self, user_input: str, debug: bool = False) -> str:
+        """内部执行循环，返回结果或 [STOPPED] 错误"""
+        self._error_count = 0
+        self._tool_fingerprints.clear()
 
         for step in range(self.max_steps):
             if debug:
@@ -78,12 +96,10 @@ class AgentLoop:
             context = self.memory.get_context(query=user_input)
             context.insert(0, Message(role="system", content=self._build_system_prompt()))
 
-            # After tool results, nudge model to summarize
             has_tool_results = any(
                 m.role == "tool" for m in self.memory.short_term.get_messages()
             )
             if has_tool_results and step > 0:
-                # Inject the most recent tool result into the nudge so small models don't hallucinate
                 last_tool = next(
                     (m.content for m in reversed(self.memory.short_term.get_messages()) if m.role == "tool"),
                     ""
@@ -98,36 +114,27 @@ class AgentLoop:
                 ))
 
             response = self.llm.generate(context, tools=self.registry.get_schemas())
-
             tool_calls = response.tool_calls or []
 
             if tool_calls:
                 if self._detect_tool_loop(tool_calls, debug):
-                    content = response.content or ""
-                    self.memory.add_message(Message(role="assistant", content=content))
-
+                    self.memory.add_message(Message(role="assistant", content=response.content or ""))
                     if self.enable_self_optimize:
                         self._capture_failure(
                             user_input, step,
                             "[STOPPED] 检测到重复工具调用回路，已中断",
                             "loop_detected",
                         )
-
-                    summary = self._force_summarize()
-                    return summary if summary else f"[STOPPED] 检测到重复工具调用回路，已中断。"
+                    return "[STOPPED] 检测到重复工具调用回路，已中断。"
 
                 for tc in tool_calls:
                     tool_msg_content = f"调用工具: {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})"
                     self.memory.add_message(Message(role="assistant", content=tool_msg_content))
-
                     result = self.registry.execute(tc.name, tc.arguments)
                     self.memory.add_message(Message(
-                        role="tool",
-                        content=result,
-                        tool_call_id=tc.id,
-                        tool_name=tc.name,
+                        role="tool", content=result,
+                        tool_call_id=tc.id, tool_name=tc.name,
                     ))
-
                     if result.startswith("[ERROR]"):
                         self._error_count += 1
                         if self._error_count >= self._max_errors:
@@ -138,7 +145,6 @@ class AgentLoop:
                                     "circuit_breaker",
                                 )
                             return f"[STOPPED] 连续错误达到上限 ({self._max_errors})，已熔断。最后错误: {result}"
-
                 continue
 
             content = response.content or ""
@@ -216,6 +222,99 @@ class AgentLoop:
             error_type=error_type,
         )
         self._last_failure_cases.append(case)
+
+    def _try_self_heal(self, user_input: str, debug: bool = False) -> str:
+        """自动触发自优化并重试执行
+
+        Returns:
+            修复后重试的结果，或原始错误消息
+        """
+        if self._self_optimize_retry_count >= self.self_optimize_max_retries:
+            return f"[STOPPED] 自优化重试已达上限 ({self.self_optimize_max_retries})"
+
+        self._self_optimize_retry_count += 1
+
+        if debug:
+            print(f"  [SELF-OPTIMIZE] 自动触发自优化 (attempt {self._self_optimize_retry_count}/{self.self_optimize_max_retries})")
+
+        # 1. 先查历史修复
+        self._try_reuse_historical_fixes()
+
+        # 2. 执行完整的自优化闭环
+        report = self.run_self_optimize()
+        self._last_optimize_report = report
+
+        if report.get("fixes_kept", 0) == 0:
+            return f"[STOPPED] 自优化未产生有效修复 (analyzed={report.get('analyzed',0)}, kept=0)"
+
+        # 3. 保存成功修复到历史
+        self._save_fixes_to_history(report)
+
+        # 4. 清理记忆，重新执行任务
+        self.memory.clear()
+        if debug:
+            print("  [SELF-OPTIMIZE] 记忆已重置，重新执行任务...")
+
+        result = self._run_loop(user_input, debug)
+
+        # 5. 如果仍然失败，递归重试
+        if "[STOPPED]" in result:
+            return self._try_self_heal(user_input, debug)
+
+        return result
+
+    def _try_reuse_historical_fixes(self):
+        """尝试复用历史修复 — 匹配当前失败模式，直接应用已知修复"""
+        if self._fix_history is None or not self._last_failure_cases:
+            return
+
+        for case in self._last_failure_cases:
+            error_type = case.get("error_type", "")
+            task_desc = case.get("task_desc", "")
+            similar = self._fix_history.find_similar(error_type, task_desc)
+            if similar:
+                best = similar[0]
+                history_fix = best.get("fix", {})
+                if history_fix.get("fix_type") in ("adjust_prompt", "add_reasoning_hint"):
+                    if "system_prompt" in history_fix.get("fixed", {}):
+                        self._self_repair._rollback_snapshots[best["signature"]] = {
+                            "system_prompt": self.system_prompt,
+                            "memory_max_tokens": self.memory.short_term.max_tokens
+                            if hasattr(self.memory, "short_term") else None,
+                        }
+                        self.system_prompt = history_fix["fixed"]["system_prompt"]
+                        self._fix_history.mark_reused(history_fix)
+                elif history_fix.get("fix_type") == "trim_context":
+                    if "memory_max_tokens" in history_fix.get("fixed", {}):
+                        self._self_repair._rollback_snapshots[best["signature"]] = {
+                            "system_prompt": self.system_prompt,
+                            "memory_max_tokens": self.memory.short_term.max_tokens
+                            if hasattr(self.memory, "short_term") else None,
+                        }
+                        if hasattr(self.memory, "short_term"):
+                            self.memory.short_term.max_tokens = history_fix["fixed"]["memory_max_tokens"]
+                        self._fix_history.mark_reused(history_fix)
+
+    def _save_fixes_to_history(self, report: dict):
+        """将验证通过的修复保存到历史"""
+        if self._fix_history is None:
+            return
+        for detail in report.get("details", []):
+            if detail.get("action") != "kept":
+                continue
+            for case in self._last_failure_cases:
+                if case.get("id") == detail.get("case_id"):
+                    fix = {"fix_type": detail.get("fix_type", ""), "original": {}, "fixed": {}}
+                    if detail.get("fix_type") == "adjust_prompt" or detail.get("fix_type") == "add_reasoning_hint":
+                        fix["fixed"]["system_prompt"] = self.system_prompt
+                    self._fix_history.record_fix(
+                        error_type=case.get("error_type", "other"),
+                        task_desc=case.get("task_desc", ""),
+                        fix=fix,
+                        root_cause={"root_cause_type": detail.get("root_cause", ""), "confidence": detail.get("confidence", 0)},
+                        verified=True,
+                    )
+                    break
 
     def run_self_optimize(self, failure_cases: list[dict] | None = None) -> dict:
         """执行自优化闭环：根因分析 → 生成修复 → 应用修复 → 验证 → 保留或回滚
