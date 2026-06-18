@@ -538,6 +538,17 @@ class AgentLoop:
             steps=self._last_step_count,
         )
 
+        # 4. 软失败检测：复盘弱点重复出现 → 触发进化链
+        if self._arch_bottleneck:
+            pattern = self._post_mortem.detect_repeating_weakness(min_occurrences=3, window=5)
+            if pattern:
+                self._arch_bottleneck.record_failure(
+                    task_desc=f"[SOFT-FAIL] {pattern['pattern']}",
+                    optimize_reports=[{"analyzed": 1, "fixes_kept": 0, "fixes_rolled_back": 1}],
+                )
+                if self._arch_bottleneck.is_bottleneck(min_consecutive_failures=2):
+                    self._try_architect_evolve(task_desc)
+
     def grow(self) -> dict:
         """主动成长：生成挑战任务，推动能力边界
 

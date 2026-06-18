@@ -166,3 +166,62 @@ class TaskPostMortem:
         recent = self.history[-10:]
         scores = [h.get("efficiency_score", 3) for h in recent]
         return sum(scores) / len(scores)
+
+    def detect_repeating_weakness(self, min_occurrences: int = 3, window: int = 5) -> dict | None:
+        """检测近期复盘中反复出现的弱点模式
+
+        当同一类改进建议在最近 N 次复盘中出现 ≥M 次时，
+        说明这不是偶发失误而是系统性缺陷，应触发进化链。
+
+        Returns:
+            {pattern, count, insights: [...]} 或 None
+        """
+        if len(self.history) < min_occurrences:
+            return None
+
+        recent = self.history[-window:]
+        patterns: dict[str, list[str]] = {}
+
+        for h in recent:
+            for item in h.get("what_could_be_better", []):
+                key = self._normalize_pattern(item)
+                if key:
+                    if key not in patterns:
+                        patterns[key] = []
+                    patterns[key].append(item)
+
+            insight = h.get("growth_insight", "")
+            if insight:
+                key = self._normalize_pattern(insight)
+                if key:
+                    if key not in patterns:
+                        patterns[key] = []
+                    patterns[key].append(insight)
+
+        for key, items in patterns.items():
+            if len(items) >= min_occurrences:
+                return {
+                    "pattern": key,
+                    "count": len(items),
+                    "insights": items[-3:],
+                }
+
+        return None
+
+    @staticmethod
+    def _normalize_pattern(text: str) -> str:
+        """提取文本中的核心关键词作为模式签名"""
+        keywords = [
+            "缺乏", "不足", "错误", "冗余", "盲目", "重复",
+            "调试", "规划", "验证", "分析", "策略", "切换",
+            "上下文", "工具", "步骤", "执行", "回路", "重试",
+            "debug", "错误输出", "试错", "无进展", "不读", "未读",
+        ]
+        parts = []
+        for kw in keywords:
+            if kw in text:
+                parts.append(kw)
+        if parts:
+            return "+".join(sorted(parts))
+        # Fallback: use first 5 chars... no, use a length-based hash
+        return text[:30].strip()
