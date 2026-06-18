@@ -584,7 +584,7 @@ class AgentLoop:
         )
         weak = self._ability_profile.get_weak_areas()
         suggestion = self._challenge_gen.suggest_next_level(self._ability_profile)
-        current_level = suggestion.get("current_level", 2) if suggestion else 2
+        current_level = suggestion.get("suggested_level", suggestion.get("current_level", 2)) if suggestion else 2
 
         challenges = self._challenge_gen.generate(
             profile_summary=profile_summary,
