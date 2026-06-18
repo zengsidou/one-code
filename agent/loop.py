@@ -18,6 +18,7 @@ from agent.verify import VerifyRepair
 from agent.fix_history import FixHistory
 from agent.meta_optimize import MetaOptimizer
 from agent.evolve import TaskPostMortem, SkillLibrary, AbilityProfile, ChallengeGenerator
+from agent.evolve import ArchitectureBottleneckDetector, ArchitectureProposalGenerator, ArchitectureApplier, ArchitectureValidator
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -85,6 +86,10 @@ class AgentLoop:
         self._skill_library = SkillLibrary(skill_library_file) if enable_evolution else None
         self._ability_profile = AbilityProfile(ability_profile_file) if enable_evolution else None
         self._challenge_gen = ChallengeGenerator(self.llm) if enable_evolution else None
+        self._arch_bottleneck = ArchitectureBottleneckDetector(self.llm) if enable_evolution else None
+        self._arch_proposer = ArchitectureProposalGenerator(self.llm) if enable_evolution else None
+        self._arch_applier = ArchitectureApplier() if enable_evolution else None
+        self._arch_validator = ArchitectureValidator() if enable_evolution else None
         self._step_trace: list[str] = []
         self._last_step_count = 0
 
@@ -289,8 +294,18 @@ class AgentLoop:
                     print(f"  [META-OPTIMIZE] 自优化0有效修复，触发元优化 (attempt {self._meta_optimize_count}/{self._meta_optimize_max})")
                 meta_result = self._meta_optimizer.optimize(report, self)
                 if meta_result.get("improved"):
-                    # 组件改善后重新尝试自优化
                     return self._try_self_heal(user_input, debug)
+
+            # 架构自进化：元优化也无效，可能是架构瓶颈
+            if self.enable_evolution and self._arch_bottleneck:
+                self._arch_bottleneck.record_failure(user_input, [report])
+                if self._arch_bottleneck.is_bottleneck(min_consecutive_failures=2):
+                    if debug:
+                        print("  [ARCH-EVOLVE] 检测到架构瓶颈，尝试架构自进化...")
+                    arch_report = self._try_architect_evolve(user_input)
+                    if arch_report.get("applied") and arch_report.get("validated"):
+                        return self._try_self_heal(user_input, debug)
+
             return f"[STOPPED] 自优化未产生有效修复 (analyzed={report.get('analyzed',0)}, kept=0)"
 
         # 3. 保存成功修复到历史
@@ -527,4 +542,39 @@ class AgentLoop:
             "skill_count": self._skill_library.get_stats()["total_skills"],
             "post_mortem_count": len(self._post_mortem.history),
             "recent_insights": self._post_mortem.get_recent_insights(3),
+        }
+
+    def _try_architect_evolve(self, task_desc: str) -> dict:
+        """尝试架构自进化：诊断 → 生成改动 → 应用 → 添加基准 → 不立即验证
+
+        Returns:
+            { applied, validated, bottleneck_type, target_file, rationale }
+        """
+        capability_gap = f"Agent 在任务「{task_desc[:100]}」上持续失败，所有 Config 层优化已穷尽。"
+
+        # 1. 诊断
+        bottleneck = self._arch_bottleneck.diagnose(self, capability_gap)
+        if bottleneck.get("confidence", 0) < 0.4:
+            return {"applied": False, "validated": False, "reason": "低置信度", "bottleneck": bottleneck}
+
+        # 2. 生成改动
+        proposal = self._arch_proposer.generate_proposal(bottleneck)
+        if not proposal:
+            return {"applied": False, "validated": False, "reason": "无法生成有效方案", "bottleneck": bottleneck}
+
+        # 3. 应用
+        applied = self._arch_applier.apply(proposal)
+        if not applied:
+            return {"applied": False, "validated": False, "reason": "应用失败", "bottleneck": bottleneck}
+
+        # 4. 添加失败任务到基准，供后续验证
+        self._arch_validator.add_benchmark(task_desc)
+
+        return {
+            "applied": True,
+            "validated": False,  # 需要重新加载模块才能验证
+            "bottleneck_type": bottleneck["bottleneck_type"],
+            "target_file": bottleneck["target_file"],
+            "rationale": proposal.get("rationale", ""),
+            "expected_effect": proposal.get("expected_effect", ""),
         }

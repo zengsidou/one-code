@@ -14,6 +14,12 @@ from agent.verify import VerifyRepair
 from agent.fix_history import FixHistory
 from agent.meta_optimize import MetaOptimizer
 from agent.evolve import TaskPostMortem, SkillLibrary, AbilityProfile
+from agent.evolve.architect import (
+    ArchitectureBottleneckDetector,
+    ArchitectureProposalGenerator,
+    ArchitectureApplier,
+    ArchitectureValidator,
+)
 from agent.loop import AgentLoop, DEFAULT_SYSTEM_PROMPT
 from tools.registry import ToolRegistry
 from memory import MemoryManager
@@ -1134,6 +1140,129 @@ def test_evolve_integration():
     print("  [PASS] test_evolve_integration")
 
 
+# ─── 测试 21: ArchitectureBottleneckDetector — 瓶颈检测 ─────────
+
+def test_arch_bottleneck_detector():
+    detector = ArchitectureBottleneckDetector(MockLLM())
+
+    # 初次：未达瓶颈
+    assert not detector.is_bottleneck(min_consecutive_failures=3)
+
+    # 记录3次失败（均无有效修复）
+    for _ in range(3):
+        detector.record_failure("test task", [
+            {"analyzed": 2, "fixes_kept": 0, "fixes_rolled_back": 2},
+        ])
+    assert detector.is_bottleneck(min_consecutive_failures=3)
+
+    # 有一次修复成功 → 未达瓶颈
+    detector.record_failure("test task", [
+        {"analyzed": 2, "fixes_kept": 1, "fixes_rolled_back": 1},
+    ])
+    assert not detector.is_bottleneck(min_consecutive_failures=3)
+
+    print("  [PASS] test_arch_bottleneck_detector")
+
+
+# ─── 测试 22: ArchitectureProposalGenerator — 改代码方案 ────────
+
+def test_arch_proposal_generator():
+    import os
+    # 用一个简单的测试文件来验证 proposal 生成
+    test_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tests", "test_arch_sample.py")
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write("# Sample test file\nclass Sample:\n    def method(self):\n        pass\n")
+
+    mock = MockLLMJSON({
+        "file_path": "tests/test_arch_sample.py",
+        "rationale": "需要添加新方法",
+        "change_type": "add_method",
+        "target_location": "Sample 类内部",
+        "new_code": "    def new_method(self):\n        return 42",
+        "old_code_hint": "",
+        "expected_effect": "增强功能",
+    })
+    generator = ArchitectureProposalGenerator(mock)
+    bottleneck = {"target_file": "tests/test_arch_sample.py", "capability_gap": "缺方法"}
+
+    proposal = generator.generate_proposal(bottleneck)
+    assert proposal is not None
+    assert proposal["rationale"] == "需要添加新方法"
+    assert "new_code" in proposal
+
+    os.remove(test_file)
+
+    # 不存在的文件
+    bottleneck2 = {"target_file": "nonexistent.py", "capability_gap": ""}
+    proposal2 = generator.generate_proposal(bottleneck2)
+    assert proposal2 is None
+
+    print("  [PASS] test_arch_proposal_generator")
+
+
+# ─── 测试 23: ArchitectureApplier — 备份+应用+回滚 ──────────────
+
+def test_arch_applier():
+    import os, shutil
+    test_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tests", "test_arch_apply.py")
+    backup_dir = "./test_arch_backups"
+
+    try:
+        # 创建测试文件
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write("# Original\nclass Test:\n    pass\n")
+
+        applier = ArchitectureApplier(backup_dir)
+
+        # 应用改动
+        proposal = {
+            "full_path": test_file,
+            "old_code_hint": "class Test:\n    pass",
+            "new_code": "class Test:\n    def new(self):\n        return 1",
+        }
+        assert applier.apply(proposal)
+
+        # 验证改动已写入
+        with open(test_file, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "def new(self)" in content
+
+        # 回滚
+        assert applier.rollback_last()
+
+        # 验证回滚
+        with open(test_file, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "def new(self)" not in content
+        assert "class Test:\n    pass" in content
+
+        # 无改动时不存在的文件
+        bad_proposal = {"full_path": "nope.py", "old_code_hint": "", "new_code": "x"}
+        assert not applier.apply(bad_proposal)
+
+    finally:
+        if os.path.exists(test_file):
+            os.remove(test_file)
+        if os.path.exists(backup_dir):
+            shutil.rmtree(backup_dir)
+
+    print("  [PASS] test_arch_applier")
+
+
+# ─── 测试 24: ArchitectureValidator — 基准验证 ──────────────────
+
+def test_arch_validator():
+    validator = ArchitectureValidator()
+
+    # 空基准
+    result = validator.validate(None)
+    assert result["total"] == 0
+    assert not result["improved"]
+
+    # 这个验证器的 validate 需要 agent_instance.run()，集成测试中覆盖
+    print("  [PASS] test_arch_validator")
+
+
 if __name__ == "__main__":
     print("Running Self-Optimize tests...\n")
     test_deepseek_adapter()
@@ -1156,4 +1285,8 @@ if __name__ == "__main__":
     test_skill_library_add_query()
     test_ability_profile()
     test_evolve_integration()
+    test_arch_bottleneck_detector()
+    test_arch_proposal_generator()
+    test_arch_applier()
+    test_arch_validator()
     print("\nAll self-optimize tests passed!")
