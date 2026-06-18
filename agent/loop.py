@@ -545,7 +545,7 @@ class AgentLoop:
         }
 
     def _try_architect_evolve(self, task_desc: str) -> dict:
-        """尝试架构自进化：诊断 → 生成改动 → 应用 → 添加基准 → 不立即验证
+        """尝试架构自进化：诊断 → 生成改动 → 应用+重载 → 验证 → 保留/回滚
 
         Returns:
             { applied, validated, bottleneck_type, target_file, rationale }
@@ -562,19 +562,36 @@ class AgentLoop:
         if not proposal:
             return {"applied": False, "validated": False, "reason": "无法生成有效方案", "bottleneck": bottleneck}
 
-        # 3. 应用
-        applied = self._arch_applier.apply(proposal)
+        # 3. 应用 + 重载模块
+        applied = self._arch_applier.apply_and_reload(proposal, self)
         if not applied:
             return {"applied": False, "validated": False, "reason": "应用失败", "bottleneck": bottleneck}
 
-        # 4. 添加失败任务到基准，供后续验证
-        self._arch_validator.add_benchmark(task_desc)
+        # 4. 验证：重新执行失败的任务
+        old_memory = self.memory
+        try:
+            self.memory.clear()
+            result = self._run_loop(task_desc)
+            validated = "[STOPPED]" not in result and "[LLM error]" not in result
+        except Exception:
+            validated = False
 
-        return {
-            "applied": True,
-            "validated": False,  # 需要重新加载模块才能验证
-            "bottleneck_type": bottleneck["bottleneck_type"],
-            "target_file": bottleneck["target_file"],
-            "rationale": proposal.get("rationale", ""),
-            "expected_effect": proposal.get("expected_effect", ""),
-        }
+        # 5. 保留或回滚
+        if validated:
+            self._arch_validator.add_benchmark(task_desc)
+            return {
+                "applied": True, "validated": True,
+                "bottleneck_type": bottleneck["bottleneck_type"],
+                "target_file": bottleneck["target_file"],
+                "rationale": proposal.get("rationale", ""),
+                "expected_effect": proposal.get("expected_effect", ""),
+                "action": "kept",
+            }
+        else:
+            self._arch_applier.rollback_last()
+            return {
+                "applied": True, "validated": False,
+                "reason": "验证失败，已回滚",
+                "bottleneck_type": bottleneck["bottleneck_type"],
+                "action": "rolled_back",
+            }

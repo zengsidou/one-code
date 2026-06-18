@@ -135,11 +135,10 @@ class ArchitectureBottleneckDetector:
 
         gap_text = capability_gap or "Agent 无法完成需要多文件协调、复杂依赖或长上下文的任务"
 
-        prompt = BOTTLENECK_DIAGNOSIS_PROMPT.format(
-            symptoms=symptoms_text,
-            current_arch=arch_text,
-            capability_gap=gap_text,
-        )
+        prompt = (BOTTLENECK_DIAGNOSIS_PROMPT
+            .replace("{ symptoms }", symptoms_text)
+            .replace("{ current_arch }", arch_text)
+            .replace("{ capability_gap }", gap_text))
 
         try:
             resp = self.llm.generate(
@@ -169,12 +168,13 @@ class ArchitectureBottleneckDetector:
         }
         bt = raw.get("bottleneck_type", "context_too_small")
         tf = raw.get("target_file", "memory/short_term.py")
+        conf = float(raw.get("confidence", 0.85))
         return {
             "bottleneck_type": bt if bt in valid_types else "context_too_small",
             "target_file": tf if tf in valid_files else "memory/short_term.py",
             "rationale": raw.get("rationale", ""),
             "capability_gap": raw.get("capability_gap", ""),
-            "confidence": float(raw.get("confidence", 0.5)),
+            "confidence": conf,
         }
 
     @staticmethod
@@ -248,8 +248,24 @@ class ArchitectureProposalGenerator:
 class ArchitectureApplier:
     """架构改动安全应用器
 
-    支持备份 → 应用 → 验证 → 回滚的完整流程。
+    支持备份 → 应用 → 重载 → 验证 → 回滚的完整流程。
     """
+
+    # 文件路径 → Python 模块名映射
+    MODULE_MAP = {
+        "memory/short_term.py": "memory.short_term",
+        "agent/loop.py": "agent.loop",
+        "agent/orchestrator.py": "agent.orchestrator",
+        "agent/subagent.py": "agent.subagent",
+        "tools/builtin/__init__.py": "tools.builtin",
+        "tools/registry.py": "tools.registry",
+    }
+
+    # 文件 → agent 组件属性映射
+    COMPONENT_MAP = {
+        "memory/short_term.py": ("memory", "short_term"),
+        "agent/loop.py": (None, None),  # loop 自身，需特殊处理
+    }
 
     def __init__(self, backup_dir: str = "./arch_backups"):
         self.backup_dir = backup_dir
@@ -265,14 +281,7 @@ class ArchitectureApplier:
         return backup_path
 
     def apply(self, proposal: dict) -> bool:
-        """应用架构改动
-
-        Args:
-            proposal: ArchitectureProposalGenerator.generate_proposal() 的返回结果
-
-        Returns:
-            是否应用成功
-        """
+        """应用架构改动"""
         file_path = proposal.get("full_path", "")
         old_code = proposal.get("old_code_hint", "")
         new_code = proposal.get("new_code", "")
@@ -281,29 +290,86 @@ class ArchitectureApplier:
             return False
 
         try:
-            self.backup(file_path)
+            backup_path = self.backup(file_path)
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
             if old_code and old_code in content:
-                # Replace specific code
                 content = content.replace(old_code, new_code, 1)
             else:
-                # Append at end
-                content = content.rstrip() + "\n\n" + new_code + "\n"
+                # Try smart insertion: find target function/class and insert new code
+                target = proposal.get("target_location", "")
+                if target and target in content:
+                    # Insert after the target line
+                    idx = content.index(target) + len(target)
+                    content = content[:idx] + "\n" + new_code + content[idx:]
+                else:
+                    content = content.rstrip() + "\n\n" + new_code + "\n"
 
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
 
             self.applied.append({
                 "file_path": file_path,
-                "backup": self.backup_dir,
+                "backup": backup_path,
                 "proposal": proposal,
                 "timestamp": datetime.now().isoformat(),
             })
             return True
         except Exception:
             return False
+
+    def apply_and_reload(self, proposal: dict, agent_instance) -> bool:
+        """应用架构改动并动态重载受影响的模块
+
+        Args:
+            proposal: 代码改动方案
+            agent_instance: AgentLoop 实例
+
+        Returns:
+            是否成功
+        """
+        if not self.apply(proposal):
+            return False
+
+        file_path = proposal.get("full_path", "")
+        rel_path = self._get_relative_path(file_path)
+
+        # 导到模块名并重载
+        module_name = self.MODULE_MAP.get(rel_path)
+        if module_name:
+            try:
+                import importlib
+                mod = importlib.import_module(module_name)
+                importlib.reload(mod)
+            except Exception:
+                pass
+
+        # 更新 agent 中的组件引用
+        comp_info = self.COMPONENT_MAP.get(rel_path)
+        if comp_info:
+            parent_attr, child_attr = comp_info
+            if parent_attr and child_attr:
+                parent = getattr(agent_instance, parent_attr, None)
+                if parent and hasattr(parent, child_attr):
+                    # Recreate the component with updated code
+                    old = getattr(parent, child_attr)
+                    try:
+                        new_instance = type(old)(max_tokens=old.max_tokens)
+                        setattr(parent, child_attr, new_instance)
+                    except Exception:
+                        pass
+
+        return True
+
+    @staticmethod
+    def _get_relative_path(file_path: str) -> str:
+        """从绝对路径提取相对路径"""
+        parts = file_path.replace("\\", "/").split("/")
+        for i, p in enumerate(parts):
+            if p in ("agent", "memory", "tools", "llm", "sandbox", "mcp"):
+                return "/".join(parts[i:])
+        return file_path
 
     def rollback_last(self) -> bool:
         """回滚最近一次改动"""

@@ -11,4 +11,5 @@ fix_history.json
 skill_library.json
 ability_profile.json
 meta_fix_history.json
+arch_backups/
 *.py-generated
