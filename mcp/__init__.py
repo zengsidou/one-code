@@ -8,3 +8,5 @@ from .protocol import (
 from .transport import StdioSyncTransport, StdioTransport
 from .server import MCPServer
 from .client import MCPClient
+from .sse_server import SSEMCPServer
+from .sse_client import SSEMCPClient
