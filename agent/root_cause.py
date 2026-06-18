@@ -36,13 +36,48 @@ class RootCauseAnalyzer:
 
     将 FailureDiagnosis 捕获的 case 交给 LLM 分析，
     输出标准化的根因类型和修复建议。
+
+    可通过 get_tunable_params() / apply_params() 被 MetaOptimizer 调优。
     """
 
-    def __init__(self, llm_adapter):
+    def __init__(self, llm_adapter, confidence_threshold: float = 0.4):
         """Args:
             llm_adapter: BaseLLM 子类实例，用于调用 LLM 分析
+            confidence_threshold: 根因分析最低置信度阈值，低于此值跳过修复
         """
         self.llm = llm_adapter
+        self.confidence_threshold = confidence_threshold
+        self._system_prompt = ROOT_CAUSE_SYSTEM_PROMPT
+        self._user_template = ROOT_CAUSE_USER_TEMPLATE
+        self._snapshot_data: dict | None = None
+
+    def get_tunable_params(self) -> dict:
+        """返回可被 MetaOptimizer 调优的参数"""
+        return {
+            "system_prompt": self._system_prompt,
+            "confidence_threshold": self.confidence_threshold,
+        }
+
+    def apply_params(self, params: dict):
+        """应用 MetaOptimizer 调优后的参数"""
+        if "system_prompt" in params:
+            self._system_prompt = params["system_prompt"]
+        if "confidence_threshold" in params:
+            self.confidence_threshold = float(params["confidence_threshold"])
+
+    def snapshot(self) -> dict:
+        """保存当前参数状态用于回滚"""
+        self._snapshot_data = {
+            "system_prompt": self._system_prompt,
+            "confidence_threshold": self.confidence_threshold,
+        }
+        return self._snapshot_data
+
+    def restore(self, snapshot: dict | None = None):
+        """恢复到快照的参数状态"""
+        data = snapshot or self._snapshot_data
+        if data:
+            self.apply_params(data)
 
     def analyze(self, failure_case: dict) -> dict:
         """分析单个失败 case 的根因
@@ -64,7 +99,7 @@ class RootCauseAnalyzer:
                 lines.append(f"[{role}] {content}")
             context_text = "\n".join(lines)
 
-        prompt_text = ROOT_CAUSE_USER_TEMPLATE.format(
+        prompt_text = self._user_template.format(
             task_desc=failure_case.get("task_desc", ""),
             failed_step=failure_case.get("failed_step", "?"),
             error_type=failure_case.get("error_type", "other"),
@@ -73,7 +108,7 @@ class RootCauseAnalyzer:
         )
 
         messages = [
-            Message(role="system", content=ROOT_CAUSE_SYSTEM_PROMPT),
+            Message(role="system", content=self._system_prompt),
             Message(role="user", content=prompt_text),
         ]
 

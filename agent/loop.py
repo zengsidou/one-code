@@ -16,6 +16,8 @@ from agent.root_cause import RootCauseAnalyzer
 from agent.self_repair import SelfRepair
 from agent.verify import VerifyRepair
 from agent.fix_history import FixHistory
+from agent.meta_optimize import MetaOptimizer
+from agent.evolve import TaskPostMortem, SkillLibrary, AbilityProfile, ChallengeGenerator
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -38,10 +40,13 @@ class AgentLoop:
         system_prompt: str = "",
         max_steps: int = 20,
         enable_self_optimize: bool = False,
+        enable_evolution: bool = False,
         llm_type: str = "deepseek",
         deepseek_api_key: str | None = None,
         self_optimize_max_retries: int = 2,
         fix_history_file: str = "./fix_history.json",
+        skill_library_file: str = "./skill_library.json",
+        ability_profile_file: str = "./ability_profile.json",
     ):
         if llm is not None:
             self.llm = llm
@@ -68,14 +73,27 @@ class AgentLoop:
         self._self_repair = SelfRepair(self.llm) if enable_self_optimize else None
         self._verify = VerifyRepair() if enable_self_optimize else None
         self._fix_history = FixHistory(fix_history_file) if enable_self_optimize else None
+        self._meta_optimizer = MetaOptimizer(self.llm) if enable_self_optimize else None
         self._last_failure_cases: list[dict] = []
         self._self_optimize_retry_count = 0
+        self._meta_optimize_count = 0
+        self._meta_optimize_max = 2
         self._last_optimize_report: dict = {}
+
+        self.enable_evolution = enable_evolution
+        self._post_mortem = TaskPostMortem(self.llm) if enable_evolution else None
+        self._skill_library = SkillLibrary(skill_library_file) if enable_evolution else None
+        self._ability_profile = AbilityProfile(ability_profile_file) if enable_evolution else None
+        self._challenge_gen = ChallengeGenerator(self.llm) if enable_evolution else None
+        self._step_trace: list[str] = []
+        self._last_step_count = 0
 
     def run(self, user_input: str, debug: bool = False) -> str:
         self._tool_fingerprints.clear()
         self._error_count = 0
         self._self_optimize_retry_count = 0
+        self._step_trace = []
+        self._last_step_count = 0
         if self.enable_self_optimize:
             self._last_failure_cases.clear()
         self.memory.add_message(Message(role="user", content=user_input))
@@ -83,6 +101,11 @@ class AgentLoop:
         result = self._run_loop(user_input, debug)
         if "[STOPPED]" in result and self.enable_self_optimize:
             result = self._try_self_heal(user_input, debug)
+
+        # 进化层：每次执行后复盘 + 沉淀
+        if self.enable_evolution:
+            self._evolve_after_run(user_input, result)
+
         return result
 
     def _run_loop(self, user_input: str, debug: bool = False) -> str:
@@ -119,6 +142,7 @@ class AgentLoop:
             if tool_calls:
                 if self._detect_tool_loop(tool_calls, debug):
                     self.memory.add_message(Message(role="assistant", content=response.content or ""))
+                    self._step_trace.append(f"Step{step}: LOOP_DETECTED")
                     if self.enable_self_optimize:
                         self._capture_failure(
                             user_input, step,
@@ -129,6 +153,7 @@ class AgentLoop:
 
                 for tc in tool_calls:
                     tool_msg_content = f"调用工具: {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})"
+                    self._step_trace.append(f"Step{step}: call {tc.name}")
                     self.memory.add_message(Message(role="assistant", content=tool_msg_content))
                     result = self.registry.execute(tc.name, tc.arguments)
                     self.memory.add_message(Message(
@@ -136,6 +161,7 @@ class AgentLoop:
                         tool_call_id=tc.id, tool_name=tc.name,
                     ))
                     if result.startswith("[ERROR]"):
+                        self._step_trace.append(f"Step{step}: ERROR {tc.name}")
                         self._error_count += 1
                         if self._error_count >= self._max_errors:
                             if self.enable_self_optimize:
@@ -144,24 +170,35 @@ class AgentLoop:
                                     f"[STOPPED] 连续错误达到上限 ({self._max_errors})，已熔断。最后错误: {result}",
                                     "circuit_breaker",
                                 )
+                            self._step_trace.append(f"Step{step}: CIRCUIT_BREAKER")
                             return f"[STOPPED] 连续错误达到上限 ({self._max_errors})，已熔断。最后错误: {result}"
                 continue
 
             content = response.content or ""
+            self._step_trace.append(f"Step{step}: final_answer")
+            self._last_step_count = step + 1
             self.memory.add_message(Message(role="assistant", content=content))
             return content
 
+        self._step_trace.append(f"MAX_STEPS reached")
         return f"[STOPPED] 达到最大迭代次数 ({self.max_steps})。"
 
     def _build_system_prompt(self) -> str:
         tool_desc = self.registry.get_tools_description()
-        return (
+        base = (
             f"{self.system_prompt}\n\n"
             "---\n"
             f"可用工具:\n{tool_desc}\n\n"
             "工具调用时输出严格 JSON: "
             '{"tool": "工具名", "arguments": {"参数名": "参数值"}}'
         )
+        # 注入已学技能
+        if self.enable_evolution and self._skill_library:
+            skills = self._skill_library.query("", top_k=3)
+            hint = self._skill_library.to_prompt_hint(skills)
+            if hint:
+                base += hint
+        return base
 
     def _detect_tool_loop(self, tool_calls: list, debug: bool = False) -> bool:
         for tc in tool_calls:
@@ -245,6 +282,15 @@ class AgentLoop:
         self._last_optimize_report = report
 
         if report.get("fixes_kept", 0) == 0:
+            # 元优化：自优化自身出问题了，尝试优化自优化组件
+            if self._meta_optimize_count < self._meta_optimize_max:
+                self._meta_optimize_count += 1
+                if debug:
+                    print(f"  [META-OPTIMIZE] 自优化0有效修复，触发元优化 (attempt {self._meta_optimize_count}/{self._meta_optimize_max})")
+                meta_result = self._meta_optimizer.optimize(report, self)
+                if meta_result.get("improved"):
+                    # 组件改善后重新尝试自优化
+                    return self._try_self_heal(user_input, debug)
             return f"[STOPPED] 自优化未产生有效修复 (analyzed={report.get('analyzed',0)}, kept=0)"
 
         # 3. 保存成功修复到历史
@@ -365,9 +411,10 @@ class AgentLoop:
             report["analyzed"] += 1
 
             # 跳过低置信度
-            if root_cause.get("confidence", 0) < 0.4:
+            threshold = getattr(self._root_cause_analyzer, "confidence_threshold", 0.4)
+            if root_cause.get("confidence", 0) < threshold:
                 detail["action"] = "skipped_low_confidence"
-                detail["message"] = f"置信度 {root_cause.get('confidence', 0):.1f} < 0.4，跳过"
+                detail["message"] = f"置信度 {root_cause.get('confidence', 0):.1f} < {threshold}，跳过"
                 report["details"].append(detail)
                 continue
 
@@ -412,3 +459,72 @@ class AgentLoop:
             report["details"].append(detail)
 
         return report
+
+    # ─── 进化层 ─────────────────────────────────────────
+
+    def _evolve_after_run(self, task_desc: str, result: str):
+        """每次执行后复盘反思 + 沉淀技能 + 记录能力画像"""
+        trace = "\n".join(self._step_trace[-15:]) if self._step_trace else "(无执行轨迹)"
+        is_failure = "[STOPPED]" in result or "[ERROR]" in result
+
+        # 1. 复盘
+        reflection = self._post_mortem.reflect(task_desc, result, trace)
+
+        # 2. 提取技能
+        self._skill_library.add_from_post_mortem(reflection)
+
+        # 3. 记录能力画像
+        difficulty = reflection.get("difficulty_for_agent", 3)
+        efficiency = reflection.get("efficiency_score", 3)
+        self._ability_profile.record(
+            task_desc=task_desc,
+            success=not is_failure,
+            difficulty=difficulty,
+            efficiency=efficiency,
+            steps=self._last_step_count,
+        )
+
+    def grow(self) -> dict:
+        """主动成长：生成挑战任务，推动能力边界
+
+        Returns:
+            {suggestion, challenges, skill_stats, growth_summary}
+        """
+        if not self.enable_evolution:
+            return {"error": "进化层未启用 (enable_evolution=False)"}
+
+        profile_summary = json.dumps(
+            self._ability_profile.get_all_category_stats(),
+            ensure_ascii=False, indent=2,
+        )
+        weak = self._ability_profile.get_weak_areas()
+        suggestion = self._challenge_gen.suggest_next_level(self._ability_profile)
+        current_level = suggestion.get("current_level", 2) if suggestion else 2
+
+        challenges = self._challenge_gen.generate(
+            profile_summary=profile_summary,
+            weak_areas=weak,
+            current_level=int(current_level),
+            count=3,
+        )
+
+        return {
+            "growth_summary": self._ability_profile.get_growth_summary(),
+            "weak_areas": weak,
+            "suggestion": suggestion,
+            "challenges": challenges,
+            "skill_stats": self._skill_library.get_stats(),
+        }
+
+    def get_evolution_report(self) -> dict:
+        """获取进化状态报告"""
+        if not self.enable_evolution:
+            return {"error": "进化层未启用"}
+        return {
+            "growth": self._ability_profile.get_growth_summary(),
+            "category_stats": self._ability_profile.get_all_category_stats(),
+            "weak_areas": self._ability_profile.get_weak_areas(),
+            "skill_count": self._skill_library.get_stats()["total_skills"],
+            "post_mortem_count": len(self._post_mortem.history),
+            "recent_insights": self._post_mortem.get_recent_insights(3),
+        }

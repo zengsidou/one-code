@@ -20,14 +20,29 @@ class SelfRepair:
 
     根据根因分析结果生成修复方案，可应用到 Agent Loop 实例上，
     并支持回滚操作。
+
+    可通过 get_tunable_params() / apply_params() 被 MetaOptimizer 调优。
     """
 
-    def __init__(self, llm_adapter):
+    def __init__(self, llm_adapter, trim_ratio: float = 0.6):
         """Args:
             llm_adapter: BaseLLM 子类实例，用于生成修复内容
+            trim_ratio: trim_context 时保留的内存比例 (0-1)
         """
         self.llm = llm_adapter
+        self.trim_ratio = trim_ratio
+        self._prompt_fix_prompt = (
+            "原始 system prompt:\n```\n{original}\n```\n\n"
+            "诊断出的问题: {detail}\n\n"
+            "请输出改进后的 system prompt（中文）。保持原有结构，只修复问题所在部分。"
+        )
+        self._reasoning_hint_prompt = (
+            "Agent 执行任务时出现推理错误: {detail}\n\n"
+            "请用一两句中文写出应追加到 system prompt 末尾的推理引导提示，"
+            "帮助模型在遇到类似情况时做出正确决策。直接输出提示文本。"
+        )
         self._rollback_snapshots: dict[str, dict] = {}
+        self._snapshot_data: dict | None = None
 
     def generate_fix(self, root_cause: dict, current_config: dict) -> dict:
         """根据根因类型生成具体修复方案
@@ -65,7 +80,7 @@ class SelfRepair:
         elif fix_type == "trim_context":
             old_tokens = current_config.get("memory_max_tokens", 4096)
             fix["original"]["memory_max_tokens"] = old_tokens
-            fix["fixed"]["memory_max_tokens"] = max(1024, int(old_tokens * 0.6))
+            fix["fixed"]["memory_max_tokens"] = max(1024, int(old_tokens * self.trim_ratio))
 
         elif fix_type == "add_reasoning_hint":
             fix["original"]["system_prompt"] = current_config.get("system_prompt", "")
@@ -87,11 +102,7 @@ class SelfRepair:
         """用 LLM 生成改进后的 system_prompt"""
         detail = root_cause.get("detail", "")
         original = current_config.get("system_prompt", "")
-        prompt = (
-            f"原始 system prompt:\n```\n{original}\n```\n\n"
-            f"诊断出的问题: {detail}\n\n"
-            "请输出改进后的 system prompt（中文）。保持原有结构，只修复问题所在部分。"
-        )
+        prompt = self._prompt_fix_prompt.format(original=original, detail=detail)
         try:
             resp = self.llm.generate(
                 [Message(role="user", content=prompt)], tools=None
@@ -103,11 +114,7 @@ class SelfRepair:
     def _generate_reasoning_hint(self, root_cause: dict) -> str:
         """生成推理引导提示"""
         detail = root_cause.get("detail", "")
-        prompt = (
-            f"Agent 执行任务时出现推理错误: {detail}\n\n"
-            "请用一两句中文写出应追加到 system prompt 末尾的推理引导提示，"
-            "帮助模型在遇到类似情况时做出正确决策。直接输出提示文本。"
-        )
+        prompt = self._reasoning_hint_prompt.format(detail=detail)
         try:
             resp = self.llm.generate(
                 [Message(role="user", content=prompt)], tools=None
@@ -115,6 +122,36 @@ class SelfRepair:
             return (resp.content or "请仔细分析问题后再做决策。").strip()
         except Exception:
             return "请逐步推理，确认每个步骤的必要性后再执行。"
+
+    def get_tunable_params(self) -> dict:
+        """返回可被 MetaOptimizer 调优的参数"""
+        return {
+            "prompt_fix_prompt": self._prompt_fix_prompt,
+            "reasoning_hint_prompt": self._reasoning_hint_prompt,
+            "trim_ratio": self.trim_ratio,
+        }
+
+    def apply_params(self, params: dict):
+        """应用 MetaOptimizer 调优后的参数"""
+        if "prompt_fix_prompt" in params:
+            self._prompt_fix_prompt = params["prompt_fix_prompt"]
+        if "reasoning_hint_prompt" in params:
+            self._reasoning_hint_prompt = params["reasoning_hint_prompt"]
+        if "trim_ratio" in params:
+            self.trim_ratio = float(params["trim_ratio"])
+
+    def snapshot(self) -> dict:
+        self._snapshot_data = {
+            "prompt_fix_prompt": self._prompt_fix_prompt,
+            "reasoning_hint_prompt": self._reasoning_hint_prompt,
+            "trim_ratio": self.trim_ratio,
+        }
+        return self._snapshot_data
+
+    def restore(self, snapshot: dict | None = None):
+        data = snapshot or self._snapshot_data
+        if data:
+            self.apply_params(data)
 
     def apply_fix(self, fix: dict, agent_loop) -> bool:
         """将修复方案应用到 Agent Loop 实例

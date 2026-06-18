@@ -8,10 +8,32 @@ class VerifyRepair:
 
     对修复后的 Agent Loop 重新执行失败任务，
     对比修复前后的执行结果，判断修复是否有效。
+
+    可通过 get_tunable_params() / apply_params() 被 MetaOptimizer 调优。
     """
 
     def __init__(self):
         self.results: list[dict] = []
+        self._failure_markers = ["[STOPPED]", "[ERROR]", "[LLM error]"]
+        self._snapshot_data: dict | None = None
+
+    def get_tunable_params(self) -> dict:
+        """返回可被 MetaOptimizer 调优的参数"""
+        return {"failure_markers": self._failure_markers.copy()}
+
+    def apply_params(self, params: dict):
+        """应用 MetaOptimizer 调优后的参数"""
+        if "failure_markers" in params:
+            self._failure_markers = list(params["failure_markers"])
+
+    def snapshot(self) -> dict:
+        self._snapshot_data = {"failure_markers": self._failure_markers.copy()}
+        return self._snapshot_data
+
+    def restore(self, snapshot: dict | None = None):
+        data = snapshot or self._snapshot_data
+        if data:
+            self.apply_params(data)
 
     def verify(self, fix: dict, agent_loop, original_task: str) -> dict:
         """验证单个修复方案
@@ -45,11 +67,9 @@ class VerifyRepair:
         self.results.append(report)
         return report
 
-    @staticmethod
-    def _is_failure(result: str) -> bool:
+    def _is_failure(self, result: str) -> bool:
         """判断执行结果是否为失败"""
-        failure_markers = ["[STOPPED]", "[ERROR]", "[LLM error]"]
-        return any(marker in result for marker in failure_markers)
+        return any(marker in result for marker in self._failure_markers)
 
     def full_verify(self, fixes: list[dict], agent_loop, original_tasks: list[str]) -> list[dict]:
         """批量验证所有修复

@@ -12,6 +12,8 @@ from agent.root_cause import RootCauseAnalyzer
 from agent.self_repair import SelfRepair
 from agent.verify import VerifyRepair
 from agent.fix_history import FixHistory
+from agent.meta_optimize import MetaOptimizer
+from agent.evolve import TaskPostMortem, SkillLibrary, AbilityProfile
 from agent.loop import AgentLoop, DEFAULT_SYSTEM_PROMPT
 from tools.registry import ToolRegistry
 from memory import MemoryManager
@@ -727,6 +729,411 @@ def test_cross_session_reuse():
     print("  [PASS] test_cross_session_reuse")
 
 
+# ─── 测试 12: MetaOptimizer — should_optimize 判断逻辑 ──────────
+
+def test_meta_should_optimize():
+    meta = MetaOptimizer(MockLLM())
+
+    # 无需优化：kept > 0
+    assert meta.should_optimize({"analyzed": 2, "fixes_generated": 2, "fixes_kept": 1, "fixes_rolled_back": 1}) is False
+
+    # 需要优化：有分析但0有效修复
+    assert meta.should_optimize({"analyzed": 2, "fixes_generated": 2, "fixes_kept": 0, "fixes_rolled_back": 2}) is True
+
+    # 需要优化：高回滚率
+    assert meta.should_optimize({"analyzed": 3, "fixes_generated": 3, "fixes_kept": 0, "fixes_rolled_back": 3}) is True
+
+    # 无分析数据不需要
+    assert meta.should_optimize({"analyzed": 0, "fixes_generated": 0, "fixes_kept": 0}) is False
+
+    print("  [PASS] test_meta_should_optimize")
+
+
+# ─── 测试 13: MetaOptimizer — 诊断弱组件 ────────────────────────
+
+def test_meta_diagnose():
+    response = {"weak_component": "self_repair", "reason": "修复生成不准确", "confidence": 0.9}
+    mock = MockLLMJSON(response)
+    meta = MetaOptimizer(mock)
+
+    quality = "analyzed: 2; fixes_kept: 0; rolled_back: 2"
+    result = meta._diagnose_weak_component(quality)
+    assert result["weak_component"] == "self_repair"
+    assert result["confidence"] == 0.9
+
+    # LLM 出错时兜底
+    bad_meta = MetaOptimizer(MockLLM())
+    fallback = bad_meta._diagnose_weak_component(quality)
+    assert fallback["weak_component"] in ("root_cause_analyzer", "self_repair", "verify", "fix_history")
+
+    print("  [PASS] test_meta_diagnose")
+
+
+# ─── 测试 14: MetaOptimizer — _get_component 路由 ───────────────
+
+def test_meta_get_component():
+    registry = ToolRegistry()
+    agent = AgentLoop(
+        llm=MockLLM(),
+        registry=registry,
+        memory=_make_memory(),
+        enable_self_optimize=True,
+    )
+
+    assert MetaOptimizer._get_component(agent, "root_cause_analyzer") is agent._root_cause_analyzer
+    assert MetaOptimizer._get_component(agent, "self_repair") is agent._self_repair
+    assert MetaOptimizer._get_component(agent, "verify") is agent._verify
+    assert MetaOptimizer._get_component(agent, "fix_history") is agent._fix_history
+    assert MetaOptimizer._get_component(agent, "nonexistent") is None
+
+    print("  [PASS] test_meta_get_component")
+
+
+# ─── 测试 15: 组件 apply_params + rollback ────────────────────────
+
+def test_component_apply_and_rollback():
+    """测试各组件独立应用参数和回滚"""
+    from agent.root_cause import RootCauseAnalyzer
+    from agent.self_repair import SelfRepair
+    from agent.verify import VerifyRepair
+    from agent.fix_history import FixHistory
+
+    # RootCauseAnalyzer
+    rca = RootCauseAnalyzer(MockLLM(), confidence_threshold=0.4)
+    snap = rca.snapshot()
+    rca.apply_params({"confidence_threshold": 0.6, "system_prompt": "New prompt"})
+    assert rca.confidence_threshold == 0.6
+    assert rca._system_prompt == "New prompt"
+    rca.restore(snap)
+    assert rca.confidence_threshold == 0.4
+    assert rca._system_prompt != "New prompt"
+
+    # SelfRepair
+    sr = SelfRepair(MockLLM(), trim_ratio=0.6)
+    snap2 = sr.snapshot()
+    sr.apply_params({"trim_ratio": 0.3, "prompt_fix_prompt": "New fix prompt"})
+    assert sr.trim_ratio == 0.3
+    assert "New fix prompt" in sr._prompt_fix_prompt
+    sr.restore(snap2)
+    assert sr.trim_ratio == 0.6
+
+    # VerifyRepair
+    vr = VerifyRepair()
+    snap3 = vr.snapshot()
+    vr.apply_params({"failure_markers": ["FAIL", "CRASH"]})
+    assert vr._is_failure("FAIL at line 10")
+    assert not vr._is_failure("[STOPPED]")
+    vr.restore(snap3)
+    assert vr._is_failure("[STOPPED]")
+
+    # FixHistory
+    import os
+    fh_file = "./test_comp_fh.json"
+    fh = FixHistory(fh_file, similarity_threshold=0.3)
+    snap4 = fh.snapshot()
+    fh.apply_params({"similarity_threshold": 0.8})
+    assert fh.similarity_threshold == 0.8
+    fh.restore(snap4)
+    assert fh.similarity_threshold == 0.3
+    if os.path.exists(fh_file):
+        os.remove(fh_file)
+
+    print("  [PASS] test_component_apply_and_rollback")
+
+
+# ─── 测试 16: MetaOptimizer 集成 — 元优化闭环 ────────────────────
+
+def test_meta_optimize_integration():
+    """端到端：自优化失败 → 元优化诊断 → 应用组件修复 → 回滚验证"""
+    registry = ToolRegistry()
+
+    @registry.register("good_tool", "A working tool")
+    def good_tool(x: str = "test") -> str:
+        return f"result: {x}"
+
+    agent = AgentLoop(
+        llm=MockLLM(response_content="done"),
+        registry=registry,
+        memory=_make_memory(),
+        max_steps=3,
+        enable_self_optimize=True,
+    )
+
+    # 降低根因分析的置信度阈值，让 analyze 返回高置信度
+    agent._root_cause_analyzer.confidence_threshold = 0.1
+
+    # Mock 根因分析返回高置信度结果
+    from unittest.mock import patch
+    with patch.object(agent._root_cause_analyzer, "analyze", return_value={
+        "root_cause_type": "prompt_unclear",
+        "confidence": 0.9,
+        "detail": "问题",
+        "suggested_fix_type": "adjust_prompt",
+        "fix_description": "fix",
+    }):
+        with patch.object(agent._self_repair, "generate_fix", return_value={
+            "fix_id": "fix_m",
+            "fix_type": "adjust_prompt",
+            "original": {"system_prompt": agent.system_prompt},
+            "fixed": {"system_prompt": agent.system_prompt + " v2"},
+            "applied": False,
+        }):
+            # 模拟一次自优化报告（全是回滚）
+            bad_report = {
+                "analyzed": 3,
+                "fixes_generated": 3,
+                "fixes_applied": 3,
+                "fixes_kept": 0,
+                "fixes_rolled_back": 3,
+                "details": [
+                    {"case_id": "c1", "root_cause": "prompt_unclear", "confidence": 0.5, "action": "rolled_back", "fix_type": "adjust_prompt"},
+                    {"case_id": "c2", "root_cause": "context_overflow", "confidence": 0.5, "action": "rolled_back", "fix_type": "trim_context"},
+                    {"case_id": "c3", "root_cause": "incorrect_reasoning", "confidence": 0.5, "action": "rolled_back", "fix_type": "add_reasoning_hint"},
+                ],
+            }
+
+            # 诊断：返回 self_repair 有问题
+            with patch.object(agent._meta_optimizer, "_diagnose_weak_component", return_value={
+                "weak_component": "self_repair",
+                "reason": "prompt 不够好",
+                "confidence": 0.88,
+            }):
+                # 生成修复：改进 trim_ratio
+                with patch.object(agent._meta_optimizer, "_generate_meta_fix", return_value={
+                    "trim_ratio": 0.35,
+                }):
+                    # Mock run_self_optimize to return improved result (kept > 0)
+                    with patch.object(agent, "run_self_optimize", return_value={
+                        "analyzed": 2, "fixes_generated": 2, "fixes_kept": 1, "fixes_rolled_back": 1, "details": [],
+                    }):
+                        result = agent._meta_optimizer.optimize(bad_report, agent)
+
+    assert result["triggered"] is True
+    assert result["weak_component"] == "self_repair"
+    assert result["meta_fix_applied"] is True
+    assert result["action"] == "kept", f"Expected kept, got {result.get('action')}"
+
+    print("  [PASS] test_meta_optimize_integration")
+
+
+# ─── 测试 17: TaskPostMortem — 复盘反思 ──────────────────────────
+
+def test_evolve_post_mortem():
+    from agent.evolve.post_mortem import TaskPostMortem
+
+    mock = MockLLMJSON({
+        "outcome": "success",
+        "difficulty_for_agent": 2,
+        "what_worked": ["先读文件再修改，避免了盲目改代码"],
+        "what_could_be_better": ["可以用 write_file 一次性写入而非多次 edit"],
+        "strategy_used": "先读后改策略",
+        "new_skill_gained": {
+            "name": "读后写模式",
+            "description": "修改代码前先 read_file 确认当前内容",
+            "reusable": True,
+            "trigger": "任何代码修改任务",
+            "steps": "1. read_file 读取目标文件 2. 理解代码 3. edit/write_file 修改",
+        },
+        "efficiency_score": 4,
+        "growth_insight": "学会了在修改代码前先查看文件内容",
+    })
+
+    pm = TaskPostMortem(mock)
+    trace = "Step0: call read_file\nStep1: call edit\nStep2: final_answer"
+    report = pm.reflect("修复 test.py 中的 bug", "修复完成！", trace)
+
+    assert report["outcome"] == "success"
+    assert report["difficulty_for_agent"] == 2
+    assert "策略" in report["strategy_used"]
+    assert report["new_skill_gained"]["name"] == "读后写模式"
+    assert report["efficiency_score"] == 4
+    assert report["growth_insight"]
+
+    assert len(pm.history) == 1
+
+    # 平均难度
+    assert pm.get_avg_difficulty() == 2.0
+    # 平均效率
+    assert pm.get_avg_efficiency() == 4.0
+    # 最近洞察
+    insights = pm.get_recent_insights(3)
+    assert len(insights) == 1
+
+    print("  [PASS] test_evolve_post_mortem")
+
+
+# ─── 测试 18: SkillLibrary — 技能存取和查询 ──────────────────────
+
+def test_skill_library_add_query():
+    import os
+    lib_file = "./test_skill_lib.json"
+    lib = SkillLibrary(lib_file)
+
+    # 添加技能
+    reflection = {
+        "task_desc": "修复 config.py bug",
+        "new_skill_gained": {
+            "name": "二分注释定位",
+            "description": "用注释掉一半代码的方式定位 bug 行",
+            "reusable": True,
+            "trigger": "遇到不熟悉的 bug 且文件较大时",
+            "steps": "1. 注释后半段代码 2. 运行测试 3. 二分缩小范围",
+        },
+    }
+    skill = lib.add_from_post_mortem(reflection)
+    assert skill is not None
+    assert skill["name"] == "二分注释定位"
+    assert skill["strength"] == 0.5
+
+    # 查询
+    results = lib.query("如何快速定位 bug")
+    assert len(results) > 0
+    assert results[0]["name"] == "二分注释定位"
+
+    # 不相关查询
+    empty = lib.query("设计新的 REST API 架构")
+    assert len(empty) == 0
+
+    # 强化
+    lib.reinforce("二分注释定位")
+    lib.reinforce("二分注释定位")
+    reinforced = lib.query("定位 bug")[0]
+    assert reinforced["strength"] > 0.5
+    assert reinforced["reinforce_count"] >= 3
+
+    # to_prompt_hint
+    hint = lib.to_prompt_hint(lib.query("bug"))
+    assert "二分注释定位" in hint
+    assert "何时使用" in hint
+
+    # stats
+    stats = lib.get_stats()
+    assert stats["total_skills"] == 1
+
+    if os.path.exists(lib_file):
+        os.remove(lib_file)
+
+    print("  [PASS] test_skill_library_add_query")
+
+
+# ─── 测试 19: AbilityProfile — 能力画像和趋势 ────────────────────
+
+def test_ability_profile():
+    import os
+    prof_file = "./test_ability.json"
+    if os.path.exists(prof_file):
+        os.remove(prof_file)
+    ap = AbilityProfile(prof_file)
+
+    # 分类测试
+    assert ap._classify_task("修复 login bug") == "debug"
+    assert ap._classify_task("重构 user 模块") == "refactor"
+    assert ap._classify_task("新增搜索功能") == "feature"
+    assert ap._classify_task("审查代码") == "review"
+    assert ap._classify_task("随便看看") == "other"
+
+    # 记录
+    ap.record("修复 login bug", success=True, difficulty=2, efficiency=4, steps=3)
+    ap.record("新增搜索功能", success=True, difficulty=3, efficiency=3, steps=5)
+    ap.record("重构 user 模块", success=False, difficulty=4, efficiency=2, steps=8)
+    ap.record("修复 payment bug", success=True, difficulty=2, efficiency=5, steps=2)
+    ap.record("新增过滤功能", success=False, difficulty=3, efficiency=2, steps=6)
+    ap.record("新增分页功能", success=False, difficulty=3, efficiency=2, steps=4)  # 凑够3个feature
+
+    # 分类统计
+    debug_stats = ap.get_category_stats("debug")
+    assert debug_stats["count"] == 2
+    assert debug_stats["success_rate"] == 1.0
+
+    feature_stats = ap.get_category_stats("feature")
+    assert feature_stats["count"] == 3
+    assert feature_stats["success_rate"] == round(1/3, 2)  # 1 success / 3
+
+    # 弱项
+    weak = ap.get_weak_areas()
+    assert "feature" in weak  # 成功率50%
+
+    # 成长摘要
+    summary = ap.get_growth_summary(window=10)
+    assert summary["total_tasks"] == 6
+    assert "recent_success_rate" in summary
+    assert "trend" in summary
+
+    if os.path.exists(prof_file):
+        os.remove(prof_file)
+
+    print("  [PASS] test_ability_profile")
+
+
+# ─── 测试 20: 进化层集成 — run() 后自动复盘+沉淀 ──────────────────
+
+def test_evolve_integration():
+    """端到端：Agent 执行任务 → 自动复盘 → 技能沉淀 → 能力画像"""
+    import os
+    lib_file = "./test_evolve_lib.json"
+    prof_file = "./test_evolve_prof.json"
+    for f in [lib_file, prof_file]:
+        if os.path.exists(f):
+            os.remove(f)
+
+    registry = ToolRegistry(safe_mode=False)
+
+    @registry.register("read", "Read a file")
+    def read(path: str = "") -> str:
+        return "file content: def foo(): pass"
+
+    import os
+    lib_file = "./test_evolve_lib.json"
+    prof_file = "./test_evolve_prof.json"
+
+    agent = AgentLoop(
+        llm=MockLLM(response_content="修复完成，已更新 test.py"),
+        registry=registry,
+        memory=_make_memory(),
+        max_steps=3,
+        enable_evolution=True,
+        skill_library_file=lib_file,
+        ability_profile_file=prof_file,
+    )
+
+    # 执行任务
+    result = agent.run("修复 test.py 中的 foo 函数 bug")
+    assert "修复完成" in result
+
+    # 验证复盘已触发
+    assert len(agent._post_mortem.history) == 1
+    # 验证能力画像已记录
+    assert len(agent._ability_profile.records) == 1
+
+    # 执行第二个任务
+    result2 = agent.run("新增 bar 函数")
+    assert len(agent._post_mortem.history) == 2
+    assert len(agent._ability_profile.records) == 2
+
+    # 验证进化报告
+    report = agent.get_evolution_report()
+    assert "growth" in report
+    assert "skill_count" in report
+    assert report["post_mortem_count"] == 2
+
+    # grow 方法
+    from unittest.mock import patch
+    with patch.object(agent._challenge_gen, "generate", return_value=[
+        {"task": "重构 foo 函数", "category": "refactor", "difficulty": 3}
+    ]):
+        plan = agent.grow()
+        assert "challenges" in plan
+        assert len(plan["challenges"]) == 1
+
+    # cleanup
+    if os.path.exists(lib_file):
+        os.remove(lib_file)
+    if os.path.exists(prof_file):
+        os.remove(prof_file)
+
+    print("  [PASS] test_evolve_integration")
+
+
 if __name__ == "__main__":
     print("Running Self-Optimize tests...\n")
     test_deepseek_adapter()
@@ -740,4 +1147,13 @@ if __name__ == "__main__":
     test_auto_self_heal()
     test_fix_history_persistence()
     test_cross_session_reuse()
+    test_meta_should_optimize()
+    test_meta_diagnose()
+    test_meta_get_component()
+    test_component_apply_and_rollback()
+    test_meta_optimize_integration()
+    test_evolve_post_mortem()
+    test_skill_library_add_query()
+    test_ability_profile()
+    test_evolve_integration()
     print("\nAll self-optimize tests passed!")
