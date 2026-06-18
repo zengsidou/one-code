@@ -7,3 +7,4 @@ from .self_repair import SelfRepair
 from .verify import VerifyRepair
 from .fix_history import FixHistory
 from .meta_optimize import MetaOptimizer
+from .checkpoint import AgentCheckpoint

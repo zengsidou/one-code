@@ -15,6 +15,7 @@ from memory.short_term import ShortTermMemory
 from memory.long_term import LongTermMemory
 from memory import MemoryManager
 from agent.loop import AgentLoop
+from agent.checkpoint import AgentCheckpoint
 from agent.models import Message
 from sandbox import SandboxPolicy, SafeExecutor
 
@@ -67,6 +68,19 @@ def main():
         llm=llm, registry=registry, memory=memory, max_steps=15,
         enable_evolution=use_evolution, enable_self_optimize=use_optimize,
     )
+
+    # 检查是否是架构进化后的自重启
+    if AgentCheckpoint.has_restart_flag():
+        ckpt = AgentCheckpoint.load()
+        if ckpt:
+            AgentCheckpoint.clear_restart_flag()
+            task = ckpt.get("current_task", "")
+            reason = ckpt.get("restart_reason", "architecture_evolution")
+            print(Colors.c(f"  [RESTART] 架构进化重启: {reason}", Colors.MAGENTA))
+            print(Colors.c(f"  [RESTART] 继续执行: {task[:80]}...", Colors.MAGENTA))
+            response = agent.run(task)
+            print(f"{Colors.c(response, Colors.CYAN)}")
+            print()
 
     print(f"  LLM:       {Colors.c(model_name, Colors.BLUE)}")
     print(f"  Context:   {Colors.c(f'{short_mem.max_tokens//1024}K tokens', Colors.BLUE)}")

@@ -20,6 +20,7 @@ from agent.meta_optimize import MetaOptimizer
 from agent.evolve import TaskPostMortem, SkillLibrary, AbilityProfile, ChallengeGenerator
 from agent.evolve import ArchitectureBottleneckDetector, ArchitectureProposalGenerator, ArchitectureApplier, ArchitectureValidator
 from agent.orchestrator import AgentOrchestrator
+from agent.checkpoint import AgentCheckpoint
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -99,6 +100,16 @@ class AgentLoop:
         self._last_step_count = 0
 
     def run(self, user_input: str, debug: bool = False) -> str:
+        # 检查是否是重启恢复
+        if AgentCheckpoint.has_restart_flag():
+            AgentCheckpoint.clear_restart_flag()
+            ckpt = AgentCheckpoint.load()
+            if ckpt:
+                self._restore_from_checkpoint(ckpt)
+                user_input = ckpt.get("current_task", user_input)
+                if debug:
+                    print(f"  [RESTART] 从检查点恢复，继续执行: {user_input[:80]}")
+
         self._tool_fingerprints.clear()
         self._error_count = 0
         self._self_optimize_retry_count = 0
@@ -111,6 +122,12 @@ class AgentLoop:
         result = self._run_loop(user_input, debug)
         if "[STOPPED]" in result and self.enable_self_optimize:
             result = self._try_self_heal(user_input, debug)
+
+        # 检查是否触发了自重启
+        if "[RESTART]" in result:
+            # 自重启已由 AgentCheckpoint.trigger_restart 处理
+            # 进程会在这里被替换，不会继续
+            return result
 
         # 进化层：每次执行后复盘 + 沉淀
         if self.enable_evolution:
@@ -619,6 +636,12 @@ class AgentLoop:
             pass
         return []
 
+    def _restore_from_checkpoint(self, ckpt: dict):
+        """从检查点恢复状态"""
+        self._self_optimize_retry_count = ckpt.get("self_optimize_retry_count", 0)
+        self._meta_optimize_count = ckpt.get("meta_optimize_count", 0)
+        self._last_step_count = ckpt.get("last_step_count", 0)
+
     def _try_architect_evolve(self, task_desc: str) -> dict:
         """尝试架构自进化：诊断 → 生成改动 → 应用+重载 → 验证 → 保留/回滚
 
@@ -642,31 +665,17 @@ class AgentLoop:
         if not applied:
             return {"applied": False, "validated": False, "reason": "应用失败", "bottleneck": bottleneck}
 
-        # 4. 验证：重新执行失败的任务
-        old_memory = self.memory
+        # 4. 自重启以加载新代码（写入检查点→替换进程）
         try:
-            self.memory.clear()
-            result = self._run_loop(task_desc)
-            validated = "[STOPPED]" not in result and "[LLM error]" not in result
+            AgentCheckpoint.trigger_restart(self, task_desc, bottleneck["bottleneck_type"])
+            # 如果 os.execv 成功，不会执行到这里
+            return {"applied": True, "validated": True, "restart": True,
+                    "bottleneck_type": bottleneck["bottleneck_type"],
+                    "rationale": proposal.get("rationale", "")}
         except Exception:
-            validated = False
-
-        # 5. 保留或回滚
-        if validated:
-            self._arch_validator.add_benchmark(task_desc)
-            return {
-                "applied": True, "validated": True,
-                "bottleneck_type": bottleneck["bottleneck_type"],
-                "target_file": bottleneck["target_file"],
-                "rationale": proposal.get("rationale", ""),
-                "expected_effect": proposal.get("expected_effect", ""),
-                "action": "kept",
-            }
-        else:
+            # 回退：进程无法重启，尝试回滚
             self._arch_applier.rollback_last()
-            return {
-                "applied": True, "validated": False,
-                "reason": "验证失败，已回滚",
-                "bottleneck_type": bottleneck["bottleneck_type"],
-                "action": "rolled_back",
-            }
+            return {"applied": True, "validated": False,
+                    "reason": "重启失败，已回滚",
+                    "bottleneck_type": bottleneck["bottleneck_type"],
+                    "action": "rolled_back"}

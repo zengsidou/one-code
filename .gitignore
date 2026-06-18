@@ -15,5 +15,6 @@ arch_backups/
 *.py-generated
 *.bak
 *.db
-test_*.json
+agent_restart.flag
+agent_checkpoint.json
 
