@@ -1,10 +1,10 @@
-&lt;!DOCTYPE html&gt;
-&lt;html lang=&quot;zh-CN&quot;&gt;
-&lt;head&gt;
-&lt;meta charset=&quot;UTF-8&quot;&gt;
-&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1.0&quot;&gt;
-&lt;title&gt;Micro-Agent IDE&lt;/title&gt;
-&lt;style&gt;
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Micro-Agent IDE</title>
+<style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'Consolas', 'Courier New', monospace; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; }
 .sidebar { width: 220px; background: #16213e; padding: 16px; display: flex; flex-direction: column; gap: 12px; border-right: 1px solid #0f3460; }
@@ -30,43 +30,40 @@ body { font-family: 'Consolas', 'Courier New', monospace; background: #1a1a2e; c
 .input-bar button:disabled { background: #555; cursor: not-allowed; }
 .tool-list { list-style: none; font-size: 11px; color: #777; }
 .tool-list li { padding: 2px 0; }
-.tool-list li::before { content: '▸ '; color: #e94560; }
+.tool-list li::before { content: '\25B8'; color: #e94560; margin-right: 4px; }
 .thinking { animation: pulse 1s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 </style>
-&lt;/head&gt;
-&lt;body&gt;
-
-&lt;div class=&quot;sidebar&quot;&gt;
-  &lt;h2&gt;⚙ Micro-Agent&lt;/h2&gt;
-  &lt;div class=&quot;stat&quot;&gt;工具: &lt;span id=&quot;toolCount&quot;&gt;-&lt;/span&gt;&lt;/div&gt;
-  &lt;div class=&quot;stat&quot;&gt;任务: &lt;span id=&quot;taskCount&quot;&gt;-&lt;/span&gt;&lt;/div&gt;
-  &lt;div class=&quot;stat&quot;&gt;成功率: &lt;span id=&quot;successRate&quot;&gt;-&lt;/span&gt;&lt;/div&gt;
-  &lt;div class=&quot;stat&quot;&gt;技能: &lt;span id=&quot;skillCount&quot;&gt;-&lt;/span&gt;&lt;/div&gt;
-  &lt;div class=&quot;stat&quot;&gt;趋势: &lt;span id=&quot;trend&quot;&gt;-&lt;/span&gt;&lt;/div&gt;
-  &lt;hr style=&quot;border-color:#0f3460;&quot;&gt;
-  &lt;h2&gt;🔧 工具列表&lt;/h2&gt;
-  &lt;ul class=&quot;tool-list&quot; id=&quot;toolList&quot;&gt;&lt;/ul&gt;
-  &lt;hr style=&quot;border-color:#0f3460;&quot;&gt;
-  &lt;button onclick=&quot;clearMemory()&quot; style=&quot;padding:8px;background:#333;color:#aaa;border:1px solid#555;border-radius:4px;cursor:pointer;font-family:inherit;font-size:11px;&quot;&gt;清空记忆&lt;/button&gt;
-  &lt;button onclick=&quot;grow()&quot; style=&quot;padding:8px;background:#333;color:#aaa;border:1px solid#555;border-radius:4px;cursor:pointer;font-family:inherit;font-size:11px;&quot;&gt;生成挑战&lt;/button&gt;
-&lt;/div&gt;
-
-&lt;div class=&quot;main&quot;&gt;
-  &lt;div class=&quot;header&quot;&gt;
-    &lt;span&gt;Micro-Agent IDE — DeepSeek V4&lt;/span&gt;
-    &lt;span class=&quot;status idle&quot; id=&quot;statusBadge&quot;&gt;就绪&lt;/span&gt;
-  &lt;/div&gt;
-  &lt;div class=&quot;chat&quot; id=&quot;chatBox&quot;&gt;
-    &lt;div class=&quot;msg system&quot;&gt;Micro-Agent IDE 已就绪。输入任务开始。&lt;/div&gt;
-  &lt;/div&gt;
-  &lt;div class=&quot;input-bar&quot;&gt;
-    &lt;input type=&quot;text&quot; id=&quot;userInput&quot; placeholder=&quot;输入编程任务... (Enter 发送)&quot; onkeydown=&quot;if(event.key==='Enter') send()&quot;&gt;
-    &lt;button id=&quot;sendBtn&quot; onclick=&quot;send()&quot;&gt;发送&lt;/button&gt;
-  &lt;/div&gt;
-&lt;/div&gt;
-
-&lt;script&gt;
+</head>
+<body>
+<div class="sidebar">
+  <h2>Micro-Agent</h2>
+  <div class="stat">工具: <span id="toolCount">-</span></div>
+  <div class="stat">任务: <span id="taskCount">-</span></div>
+  <div class="stat">成功率: <span id="successRate">-</span></div>
+  <div class="stat">技能: <span id="skillCount">-</span></div>
+  <div class="stat">趋势: <span id="trend">-</span></div>
+  <hr style="border-color:#0f3460;">
+  <h2>工具列表</h2>
+  <ul class="tool-list" id="toolList"></ul>
+  <hr style="border-color:#0f3460;">
+  <button onclick="clearMemory()" style="padding:8px;background:#333;color:#aaa;border:1px solid #555;border-radius:4px;cursor:pointer;font-family:inherit;font-size:11px;width:100%;">清空记忆</button>
+  <button onclick="grow()" style="padding:8px;background:#333;color:#aaa;border:1px solid #555;border-radius:4px;cursor:pointer;font-family:inherit;font-size:11px;width:100%;margin-top:6px;">生成挑战</button>
+</div>
+<div class="main">
+  <div class="header">
+    <span>Micro-Agent IDE - DeepSeek V4</span>
+    <span class="status idle" id="statusBadge">就绪</span>
+  </div>
+  <div class="chat" id="chatBox">
+    <div class="msg system">Micro-Agent IDE 已就绪。输入任务开始。</div>
+  </div>
+  <div class="input-bar">
+    <input type="text" id="userInput" placeholder="输入编程任务... (Enter 发送)" onkeydown="if(event.key==='Enter') send()">
+    <button id="sendBtn" onclick="send()">发送</button>
+  </div>
+</div>
+<script>
 let running = false;
 
 async function send() {
@@ -78,10 +75,8 @@ async function send() {
   document.getElementById('sendBtn').disabled = true;
   document.getElementById('statusBadge').textContent = '思考中...';
   document.getElementById('statusBadge').className = 'status running';
-
   addMessage(msg, 'user');
-  addMessage('&lt;span class=&quot;thinking&quot;&gt;··· 思考中 ···&lt;/span&gt;', 'system', 'thinkingMsg');
-
+  addMessage('<span class="thinking">思考中...</span>', 'system', 'thinkingMsg');
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
@@ -99,7 +94,6 @@ async function send() {
     removeMessage('thinkingMsg');
     addMessage('连接失败: ' + e.message, 'error');
   }
-
   running = false;
   document.getElementById('sendBtn').disabled = false;
   document.getElementById('statusBadge').textContent = '就绪';
@@ -139,7 +133,7 @@ async function updateTools() {
     const res = await fetch('/api/tools');
     const data = await res.json();
     const list = document.getElementById('toolList');
-    list.innerHTML = (data.tools || []).map(t => '&lt;li&gt;' + t + '&lt;/li&gt;').join('');
+    list.innerHTML = (data.tools || []).map(function(t) { return '<li>' + t + '</li>'; }).join('');
   } catch (e) {}
 }
 
@@ -153,10 +147,10 @@ async function grow() {
   try {
     const res = await fetch('/api/grow', { method: 'POST' });
     const data = await res.json();
-    const challenges = data.challenges || [];
-    let text = '挑战任务:\n';
-    challenges.forEach(c => {
-      text += `  [L${c.difficulty}] ${c.task}\n`;
+    var challenges = data.challenges || [];
+    var text = '挑战任务:\n';
+    challenges.forEach(function(c) {
+      text += '  [L' + c.difficulty + '] ' + c.task + '\n';
     });
     addMessage(text, 'agent');
   } catch (e) {
@@ -167,6 +161,6 @@ async function grow() {
 updateStatus();
 updateTools();
 setInterval(updateStatus, 10000);
-&lt;/script&gt;
-&lt;/body&gt;
-&lt;/html&gt;
+</script>
+</body>
+</html>
