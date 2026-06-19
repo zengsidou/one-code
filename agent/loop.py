@@ -28,22 +28,46 @@ DEFAULT_SYSTEM_PROMPT = (
     "你的知识截止于 2025 年，对于不确定的信息会用 search_web 工具查询。\n\n"
     "══════ 核心工作流（每次任务必须遵守）══════\n"
     "1. 规划: 任务开始时不调用工具，先在脑中列出：要改哪些文件、顺序、怎么验证\n"
-    "2. 探索: 用 grep/glob 搜索相关代码，用 read_file 读取关键文件\n"
+    "2. 探索: 用 grep/glob 搜索相关代码，用 read_file 读取关键文件。不要凭记忆猜测代码内容\n"
     "3. 修复: 优先用 edit_file 做精准替换，只在创建新文件时用 write_file\n"
     "4. 验证: 用 run_shell 运行验证（Python 用 'python xxx.py'，JS 用 'node xxx.js'）\n"
     "5. 迭代: 如果验证失败，仔细阅读错误输出，找出根因后回到步骤 2，不要盲目重试\n"
-    "6. 完成: 验证通过后，输出简洁总结，停止调用工具\n"
+    "6. 完成: 验证通过后，用简短中文总结做了什么，停止调用工具\n"
     "══════════════════════════════════════════\n\n"
-    "行为准则:\n"
-    "- 只要有可能就用 edit_file，不要用 write_file 重写整个文件\n"
-    "- 收到工具返回的 [ERROR] 后，必须阅读错误内容，分析原因后再行动\n"
-    "- 同一工具相同参数连续调用 3 次无进展，换个思路\n"
+    "行为准则 — 必须遵守:\n"
+    "- 优先用 edit_file，不要用 write_file 重写整个文件（除非创建新文件）\n"
+    "- 收到 [ERROR] 后必须阅读内容、分析原因，换方法而不是重试相同操作\n"
+    "- 同一工具相同参数连续 3 次无进展，换个思路\n"
     "- 不要猜测代码内容，先 read_file 确认再修改\n"
-    "- 用户要求搜索/查资料时，必须调用 search_web 工具，禁止凭记忆编造\n"
-    "- 搜索后如需深入了解某条结果，用 fetch_url 抓取该 URL 的完整页面内容\n"
+    "- 用户要求搜索/查资料时，必须调用 search_web，禁止凭记忆编造\n"
+    "- 搜索后如需深读，用 fetch_url 抓取完整页面\n"
     "- 不确定的 API、版本号、命令语法，必须用 search_web 查证后再回答\n"
-    "- 不要编造不存在的函数、库、配置。如果不知道就老实说不知道\n"
-    "- 每个回答必须有依据：要么来自工具返回的实际结果，要么来自搜索到的真实网页\n"
+    "- 不要编造不存在的函数、库、配置。不知道就老实说不知道\n"
+    "- 每个回答必须有依据：工具返回结果或搜索到的真实网页\n\n"
+    "代码规范:\n"
+    "- 不添加不必要的注释，让代码自解释\n"
+    "- 不引入超出任务范围的抽象或重构\n"
+    "- 不要为不可能发生的场景添加错误处理\n"
+    "- 修改代码前先理解文件的代码风格，模仿现有模式\n\n"
+    "Git 安全:\n"
+    "- 绝对不要主动提交代码，除非用户明确要求\n"
+    "- 不要修改 .gitignore 之外的 git 配置\n"
+    "- 不要运行 git push --force 或 git reset --hard\n\n"
+    "工具使用策略:\n"
+    "- grep: 搜索代码内容，支持正则和文件过滤(include)\n"
+    "- glob: 按模式查找文件，如 '**/*.py'\n"
+    "- read_file: 读文件，支持 offset/limit 分页\n"
+    "- edit_file: 精确替换字符串，old_string 必须唯一\n"
+    "- write_file: 写新文件，会覆盖已有文件\n"
+    "- run_shell: 执行命令，Python 用 'python file.py'，JS 用 'node file.js'\n"
+    "- search_web: Bing 搜索，找到信息后用 fetch_url 深读\n"
+    "- fetch_url: 抓取网页全文（Markdown 格式）\n"
+    "- list_dir: 列出目录内容\n"
+    "- delegate_task: 分配子任务给子 Agent 并行处理\n\n"
+    "输出规范:\n"
+    "- 回答要简洁，直接给出结论，避免冗长解释\n"
+    "- 修复 bug 后只说修了什么、验证结果，不要叙述思考过程\n"
+    "- 引用文件时用格式: `文件路径:行号`\n"
     "- 工具调用格式: {\"tool\": \"工具名\", \"arguments\": {...}}"
 )
 
@@ -171,16 +195,41 @@ class AgentLoop:
         self._error_count = 0
         self._tool_fingerprints.clear()
 
-        for step in range(self.max_steps):
+        step = 0
+        idle_steps = 0
+        while True:
+            step += 1
             if debug:
                 print(f"  [DEBUG step={step}] fingerprints={self._tool_fingerprints[-5:]}")
+
             context = self.memory.get_context(query=user_input)
             context.insert(0, Message(role="system", content=self._build_system_prompt()))
+
+            # ━━━ 上下文压力感知 ━━━
+            token_count = self.memory.short_term.get_token_count()
+            pressure = self._pressure_level(token_count)
+            if pressure >= 2 and step > 3:
+                context.append(Message(
+                    role="system",
+                    content=f"[上下文压力 {pressure}/3] 当前上下文 {token_count} tokens。请尽快完成当前任务并给出最终回答，不要再调用非必要工具。"
+                ))
+            if pressure >= 3:
+                context.append(Message(
+                    role="system",
+                    content="[上下文即将溢出] 立即停止工具调用，基于已有信息给出最终中文回答。不要调用任何工具。"
+                ))
+
+            # ━━━ 步数上限软提醒 ━━━
+            if step >= self.max_steps - 3:
+                context.append(Message(
+                    role="system",
+                    content=f"[步数提醒] 已执行 {step} 步，请在当前轮给出最终回答。"
+                ))
 
             has_tool_results = any(
                 m.role == "tool" for m in self.memory.short_term.get_messages()
             )
-            if has_tool_results and step > 0:
+            if has_tool_results and step > 1:
                 last_tool = next(
                     (m.content for m in reversed(self.memory.short_term.get_messages()) if m.role == "tool"),
                     ""
@@ -234,16 +283,39 @@ class AgentLoop:
                                     )
                                 self._step_trace.append(f"Step{step}: CIRCUIT_BREAKER")
                                 return f"[STOPPED] 连续工具执行错误达到上限 ({self._max_errors})，已熔断。最后错误: {result}"
+                idle_steps = 0
                 continue
 
+            # 无工具调用
+            idle_steps += 1
             content = response.content or ""
+
+            # 连续 2 步无工具调用 → 最终回答
+            if idle_steps >= 2 or step >= self.max_steps:
+                self._step_trace.append(f"Step{step}: final_answer")
+                self._last_step_count = step
+                self.memory.add_message(Message(role="assistant", content=content, reasoning_content=response.reasoning_content))
+                return content
+
+            # 空回复 → 提示继续
+            if not content.strip():
+                self.memory.add_message(Message(role="assistant", content="", reasoning_content=response.reasoning_content))
+                continue
+
             self._step_trace.append(f"Step{step}: final_answer")
-            self._last_step_count = step + 1
+            self._last_step_count = step
             self.memory.add_message(Message(role="assistant", content=content, reasoning_content=response.reasoning_content))
             return content
 
-        self._step_trace.append(f"MAX_STEPS reached")
-        return f"[STOPPED] 达到最大迭代次数 ({self.max_steps})。"
+    @staticmethod
+    def _pressure_level(token_count: int) -> int:
+        """上下文压力等级: 0=正常, 1=关注, 2=警告, 3=紧急"""
+        max_tokens = 65536
+        ratio = token_count / max_tokens
+        if ratio > 0.85: return 3
+        if ratio > 0.70: return 2
+        if ratio > 0.50: return 1
+        return 0
 
     def _build_system_prompt(self) -> str:
         if not hasattr(self, "_cached_tool_desc"):
