@@ -216,12 +216,14 @@ def _learn_from_exchange(user_input: str, agent_response: str):
     if not user_input or not agent_response or len(agent_response) < 10:
         return
 
+    from agent.models import Message
+    from llm.deepseek_api import DeepSeekAdapter
+
     boots = ContextBootstrapper()
     reflection = ""
 
     # 用独立 LLM 做对话质量自反思（不复用 agent 的 LLM 上下文）
     try:
-        from llm.deepseek_api import DeepSeekAdapter
         reflection_llm = DeepSeekAdapter(timeout=10)
         resp = reflection_llm.generate(
             [Message(role="user", content=(
