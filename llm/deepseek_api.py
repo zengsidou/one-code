@@ -19,7 +19,7 @@ class DeepSeekAdapter(BaseLLM):
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "deepseek-v4-pro",
+        model: str = "deepseek-chat",
         timeout: float = 60.0,
         max_retries: int = 1,
     ):
@@ -118,8 +118,8 @@ class DeepSeekAdapter(BaseLLM):
             entry: dict[str, Any] = {"role": m.role}
             if m.content is not None:
                 entry["content"] = m.content
-            if m.reasoning_content:
-                entry["reasoning_content"] = m.reasoning_content
+            if m.role == "assistant":
+                entry["reasoning_content"] = m.reasoning_content or ""
             if m.tool_calls:
                 entry["tool_calls"] = [
                     {

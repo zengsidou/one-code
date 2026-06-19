@@ -91,7 +91,7 @@ def test_deepseek_adapter():
     from llm.deepseek_api import DeepSeekAdapter
 
     adapter = DeepSeekAdapter(api_key="sk-test-key")
-    assert adapter.model == "deepseek-v4-pro", "Default model should be deepseek-v4-pro"
+    assert adapter.model == "deepseek-chat", "Default model should be deepseek-chat"
     assert adapter.api_key == "sk-test-key", "API key not set"
 
     # 测试 embed 占位
@@ -247,7 +247,7 @@ def test_generate_fix():
         "system_prompt": "You are an agent.",
         "tool_descriptions": {"read_file": "Read a file", "write_file": "Write a file"},
         "memory_max_tokens": 4096,
-        "model_name": "deepseek-v4-pro",
+        "model_name": "deepseek-chat",
     }
 
     # adjust_prompt
