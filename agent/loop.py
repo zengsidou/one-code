@@ -133,9 +133,15 @@ class AgentLoop:
 
         # 检查是否触发了自重启
         if "[RESTART]" in result:
-            # 自重启已由 AgentCheckpoint.trigger_restart 处理
-            # 进程会在这里被替换，不会继续
             return result
+
+        # 验证 Oracle：检查任务是否真正完成（软失败检测）
+        if "[STOPPED]" not in result and self.enable_evolution:
+            vf = self._verify_task(user_input)
+            if vf and not vf.get("passed"):
+                result = f"[SOFT-FAIL] {vf.get('reason', '验证失败')}"
+                if debug:
+                    print(f"  [VERIFY] 软失败: {vf['reason']}")
 
         # 进化层：每次执行后复盘 + 沉淀
         if self.enable_evolution:
@@ -723,3 +729,54 @@ class AgentLoop:
                     "reason": "重启失败，已回滚",
                     "bottleneck_type": bottleneck["bottleneck_type"],
                     "action": "rolled_back"}
+
+    def _verify_task(self, user_input: str) -> dict | None:
+        """验证任务是否真正完成。运行修改过的 Python/JS 文件，检查是否有运行时错误。
+
+        只在任务涉及代码修复/编写时验证。搜索/分析类任务返回 None 跳过。
+
+        Returns:
+            {"passed": True} 或 {"passed": False, "reason": "..."} 或 None (无法/无需验证)
+        """
+        # 判断任务类型 — 只看代码修复/编写类任务
+        code_keywords = ["修复", "fix", "修改", "编写", "实现", "创建", "添加", "debug", "调试"]
+        if not any(kw in user_input.lower() for kw in code_keywords):
+            return None
+
+        from tools.registry import run_shell
+
+        msgs = self.memory.short_term.get_messages()
+        modified_files = set()
+        import re
+
+        for msg in msgs:
+            if msg.role != "tool":
+                continue
+            content = msg.content or ""
+            for line in content.split("\n"):
+                if "File written:" in line:
+                    fpath = line.split("File written:")[1].strip().split(" ")[0].strip()
+                    modified_files.add(fpath)
+                elif "已替换" in line:
+                    m = re.search(r'(?:已替换|replaced)\s+(\S+)', line)
+                    if m:
+                        modified_files.add(m.group(1))
+
+        if not modified_files:
+            return None
+
+        for fpath in list(modified_files)[:5]:
+            ext = os.path.splitext(fpath)[1].lower()
+            if ext not in (".py", ".js"):
+                continue
+            try:
+                if ext == ".py":
+                    result = run_shell(f"python \"{fpath}\"", timeout=10)
+                else:
+                    result = run_shell(f"node \"{fpath}\"", timeout=10)
+                if "[ERROR]" in result or "Traceback" in result or "Error: " in result or "SyntaxError" in result:
+                    return {"passed": False, "reason": f"运行 {fpath} 失败: {result[:200]}"}
+            except Exception as e:
+                return {"passed": False, "reason": f"验证 {fpath} 异常: {e}"}
+
+        return {"passed": True}
