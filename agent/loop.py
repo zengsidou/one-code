@@ -129,6 +129,17 @@ class AgentLoop:
             self._last_failure_cases.clear()
         self.memory.add_message(Message(role="user", content=user_input))
 
+        # ━━━ 硬编码搜索触发 ━━━
+        search_triggers = ["搜索", "查一下", "查查", "查", "search", "最新",
+                          "教程", "文档", "官方", "是什么", "什么是", "介绍一下",
+                          "介绍一下", "有哪些", "fetch"]
+        is_code_task = any(kw in user_input for kw in ["修复", "fix", "修改", "改", "写", "创建", "实现", "debug"])
+        if any(kw in user_input for kw in search_triggers) and not is_code_task:
+            self.memory.add_message(Message(
+                role="system",
+                content="[前置指令] 先调用 search_web 搜索相关信息，找到可靠来源后用 fetch_url 读取详细内容，然后基于实际搜索结果回答。不要凭记忆编造。",
+            ))
+
         result = self._run_loop(user_input, debug)
         if "[STOPPED]" in result and self.enable_self_optimize:
             result = self._try_self_heal(user_input, debug)
