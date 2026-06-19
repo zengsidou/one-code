@@ -19,7 +19,7 @@ class DeepSeekAdapter(BaseLLM):
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "deepseek-chat",
+        model: str = "deepseek-v4-pro",
         timeout: float = 60.0,
         max_retries: int = 1,
     ):

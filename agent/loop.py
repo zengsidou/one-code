@@ -198,7 +198,7 @@ class AgentLoop:
 
             if tool_calls:
                 if self._detect_tool_loop(tool_calls, debug):
-                    self.memory.add_message(Message(role="assistant", content=response.content or ""))
+                    self.memory.add_message(Message(role="assistant", content=response.content or "", reasoning_content=response.reasoning_content))
                     self._step_trace.append(f"Step{step}: LOOP_DETECTED")
                     if self.enable_self_optimize:
                         self._capture_failure(
@@ -211,7 +211,7 @@ class AgentLoop:
                 for tc in tool_calls:
                     tool_msg_content = f"调用工具: {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})"
                     self._step_trace.append(f"Step{step}: call {tc.name}")
-                    self.memory.add_message(Message(role="assistant", content=tool_msg_content, tool_calls=[tc]))
+                    self.memory.add_message(Message(role="assistant", content=tool_msg_content, tool_calls=[tc], reasoning_content=response.reasoning_content))
                     result = self.registry.execute(tc.name, tc.arguments)
                     self.memory.add_message(Message(
                         role="tool", content=result,
@@ -239,7 +239,7 @@ class AgentLoop:
             content = response.content or ""
             self._step_trace.append(f"Step{step}: final_answer")
             self._last_step_count = step + 1
-            self.memory.add_message(Message(role="assistant", content=content))
+            self.memory.add_message(Message(role="assistant", content=content, reasoning_content=response.reasoning_content))
             return content
 
         self._step_trace.append(f"MAX_STEPS reached")

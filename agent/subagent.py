@@ -50,7 +50,7 @@ class SubAgent:
 
             if not tool_calls:
                 content = response.content or ""
-                messages.append(Message(role="assistant", content=content))
+                messages.append(Message(role="assistant", content=content, reasoning_content=response.reasoning_content))
                 return content
 
             for tc in tool_calls:
@@ -59,6 +59,7 @@ class SubAgent:
                     role="assistant",
                     content=f"调用工具: {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})",
                     tool_calls=[tc],
+                    reasoning_content=response.reasoning_content,
                 ))
 
                 result = self.registry.execute(tc.name, tc.arguments)
