@@ -21,6 +21,7 @@ class Message:
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None  # role=tool 时对应
     tool_name: str | None = None     # role=tool 时工具名
+    reasoning_content: str | None = None  # DeepSeek V4 Pro thinking mode
 
 
 @dataclass

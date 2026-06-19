@@ -67,6 +67,7 @@ class DeepSeekAdapter(BaseLLM):
                 choice = data["choices"][0]
                 msg = choice.get("message", {})
                 content = msg.get("content") or ""
+                reasoning = msg.get("reasoning_content") or ""
                 raw_tool_calls = msg.get("tool_calls")
 
                 tool_calls = None
@@ -82,7 +83,7 @@ class DeepSeekAdapter(BaseLLM):
                         for i, tc in enumerate(raw_tool_calls)
                     ]
 
-                return Message(role="assistant", content=content, tool_calls=tool_calls)
+                return Message(role="assistant", content=content, tool_calls=tool_calls, reasoning_content=reasoning)
 
             except httpx.HTTPStatusError as e:
                 last_error = e
@@ -117,6 +118,8 @@ class DeepSeekAdapter(BaseLLM):
             entry: dict[str, Any] = {"role": m.role}
             if m.content is not None:
                 entry["content"] = m.content
+            if m.reasoning_content:
+                entry["reasoning_content"] = m.reasoning_content
             if m.tool_calls:
                 entry["tool_calls"] = [
                     {
