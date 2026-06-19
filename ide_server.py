@@ -205,56 +205,45 @@ def clear():
 
 
 def _learn_from_exchange(user_input: str, agent_response: str):
-    """Agent 自反思对话质量，更新自己的行为偏好
-
-    不使用硬编码规则——让 agent 用自己的 LLM 分析：
-    1. 我的回答是否合适？
-    2. 用户看起来满意还是不满？
-    3. 下次我应该怎么调整？
-    """
+    """Agent 自反思对话质量"""
     global _boot_context
     if not user_input or not agent_response or len(agent_response) < 10:
         return
 
+    boots = ContextBootstrapper()
+    reflection = ""
+
+    # 用独立 LLM 做对话质量自反思（不复用 agent 的 LLM 上下文）
     try:
-        agent = get_agent()
-        # 用 agent 自己的 LLM 做对话质量自反思
-        reflection_prompt = (
-            "你刚和用户完成了一次对话。请反思你的回答质量。\n\n"
-            f"用户说: {user_input[:300]}\n\n"
-            f"你的回答（摘要）: {agent_response[:500]}\n\n"
-            "请分析:\n"
-            "1. 用户满意吗？(非常满意 / 还行 / 不满意)\n"
-            "2. 回答长度合适吗？(太长 / 合适 / 太短)\n"
-            "3. 回答风格合适吗？(太啰嗦 / 合适 / 太干瘪)\n"
-            "4. 下次类似问题，你应该怎么调整？(一句话建议)\n\n"
-            "只输出分析，不要额外解释。"
-        )
-        resp = agent.llm.generate(
-            [Message(role="user", content=reflection_prompt)],
+        from llm.deepseek_api import DeepSeekAdapter
+        reflection_llm = DeepSeekAdapter(timeout=10)
+        resp = reflection_llm.generate(
+            [Message(role="user", content=(
+                "你刚和用户完成了一次对话。请反思你的回答质量。\n\n"
+                f"用户说: {user_input[:200]}\n\n"
+                f"你的回答（摘要）: {agent_response[:400]}\n\n"
+                "请用一句话评价: 回答长度(太长/合适/太短)，风格(太啰嗦/合适/太干瘪)，用户满意度。"
+                "只输出评价，不要解释。"
+            ))],
             tools=None,
         )
-        reflection = (resp.content or "")[:500]
-    except Exception:
-        return
+        reflection = (resp.content or "")[:200]
+    except Exception as e:
+        reflection = f"[反思失败: {e}]"[:100]
 
-    # 从自反思中提取行为调整，构建下一次对话的自我提示
-    boots = ContextBootstrapper()
-    self_guidance = _extract_self_guidance(reflection)
-    if self_guidance:
-        boots.update_preference("上次反思", self_guidance)
+    if reflection:
+        # 提取行为指导
+        guidance = _extract_self_guidance(reflection)
+        if guidance:
+            boots.update_preference("上次反思", guidance)
+        boots.record_feedback(f"[自反思] 用户: {user_input[:60]} | 反思: {reflection}")
 
-    # 记录反思历史
-    boots.record_feedback(f"[自反思] 用户: {user_input[:60]} | 反思: {reflection[:150]}")
-
-    # 重新构建启动上下文（融入新的自我认知）
+    # 重建启动上下文
     _boot_context = boots.build_boot_context()
-
-    # 将在下次对话前注入自我提示
-    if self_guidance and _boot_context:
+    if reflection:
         _boot_context.append(Message(
             role="system",
-            content=f"[自我提示] 上次对话后，我反思了自己的表现: {self_guidance}"
+            content=f"[自我提示] 上次对话反思: {reflection}"
         ))
     """从 agent 返回中提取涉及的文件名"""
     import re
