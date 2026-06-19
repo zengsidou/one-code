@@ -701,10 +701,13 @@ class AgentLoop:
         self._last_step_count = ckpt.get("last_step_count", 0)
 
     def _try_architect_evolve(self, task_desc: str) -> dict:
-        """尝试架构自进化：诊断 → 生成改动 → 应用+重载 → 验证 → 保留/回滚
+        """尝试架构自进化：诊断 → 生成改动 → 应用+自测试 → 保留/回滚+重试
+
+        自测试闭环：apply 后自动跑 pytest，失败则回滚，最多重试 3 次。
+        每次重试将失败信息反馈给 LLM 以改进方案。
 
         Returns:
-            { applied, validated, bottleneck_type, target_file, rationale }
+            { applied, validated, bottleneck_type, target_file, rationale, self_test }
         """
         capability_gap = f"Agent 在任务「{task_desc[:100]}」上持续失败，所有 Config 层优化已穷尽。"
 
@@ -713,30 +716,43 @@ class AgentLoop:
         if bottleneck.get("confidence", 0) < 0.4:
             return {"applied": False, "validated": False, "reason": "低置信度", "bottleneck": bottleneck}
 
-        # 2. 生成改动
-        proposal = self._arch_proposer.generate_proposal(bottleneck)
-        if not proposal:
-            return {"applied": False, "validated": False, "reason": "无法生成有效方案", "bottleneck": bottleneck}
+        # 2. 生成 + 应用 + 自测试（最多重试 3 次）
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            proposal = self._arch_proposer.generate_proposal(bottleneck)
+            if not proposal:
+                return {"applied": False, "validated": False, "reason": "无法生成有效方案", "bottleneck": bottleneck}
 
-        # 3. 应用 + 重载模块
-        applied = self._arch_applier.apply_and_reload(proposal, self)
-        if not applied:
-            return {"applied": False, "validated": False, "reason": "应用失败", "bottleneck": bottleneck}
+            result = self._arch_applier.apply_and_reload(proposal, self, run_tests=True)
 
-        # 4. 自重启以加载新代码（写入检查点→替换进程）
-        try:
-            AgentCheckpoint.trigger_restart(self, task_desc, bottleneck["bottleneck_type"])
-            # 如果 os.execv 成功，不会执行到这里
-            return {"applied": True, "validated": True, "restart": True,
-                    "bottleneck_type": bottleneck["bottleneck_type"],
-                    "rationale": proposal.get("rationale", "")}
-        except Exception:
-            # 回退：进程无法重启，尝试回滚
-            self._arch_applier.rollback_last()
-            return {"applied": True, "validated": False,
-                    "reason": "重启失败，已回滚",
-                    "bottleneck_type": bottleneck["bottleneck_type"],
-                    "action": "rolled_back"}
+            if result["success"] and result["test_result"] == "passed":
+                print(f"  [L4-SELF-TEST] 第{attempt}次尝试通过 ✓")
+                # 自重启以加载新代码（写入检查点→替换进程）
+                try:
+                    AgentCheckpoint.trigger_restart(self, task_desc, bottleneck["bottleneck_type"])
+                    return {"applied": True, "validated": True, "restart": True,
+                            "bottleneck_type": bottleneck["bottleneck_type"],
+                            "rationale": proposal.get("rationale", ""),
+                            "self_test": "passed", "attempts": attempt}
+                except Exception:
+                    self._arch_applier.rollback_last()
+                    return {"applied": True, "validated": False,
+                            "reason": "重启失败，已回滚",
+                            "self_test": "passed"}
+
+            # 测试失败 — 反馈给 LLM 后重试
+            test_output = result.get("test_output", "")
+            print(f"  [L4-SELF-TEST] 第{attempt}次尝试失败，回滚并重试...")
+            if attempt < max_attempts:
+                bottleneck["retry_hint"] = (
+                    f"上次改动（第{attempt}次）导致 pytest 测试失败。"
+                    f"失败摘要:\n{test_output[:300]}\n"
+                    f"请换一个方案或修复引入的问题。"
+                )
+
+        return {"applied": False, "validated": False,
+                "reason": f"自测试失败 {max_attempts} 次后放弃",
+                "bottleneck_type": bottleneck["bottleneck_type"]}
 
     def _verify_task(self, user_input: str) -> dict | None:
         """验证任务是否真正完成。运行修改过的 Python/JS 文件，检查是否有运行时错误。

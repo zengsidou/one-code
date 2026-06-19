@@ -315,6 +315,11 @@ class ArchitectureProposalGenerator:
             .replace("{ file_content }", file_content[-8000:])
             .replace("{ capability_gap }", bottleneck.get("capability_gap", "")))
 
+        # 追加重试提示（如果之前尝试失败了）
+        retry_hint = bottleneck.get("retry_hint", "")
+        if retry_hint:
+            prompt += f"\n\n## ⚠️ 重试提示\n上次方案导致测试失败，请换思路。\n{retry_hint}"
+
         # 追加工具生成规范提示
         if "builtin" in file_path or bottleneck.get("bottleneck_type") == "tool_too_simple":
             prompt += TOOL_GENERATION_HINT
@@ -364,7 +369,9 @@ class ArchitectureApplier:
         self.backup_dir = backup_dir
         os.makedirs(backup_dir, exist_ok=True)
         self.applied: list[dict] = []
-        self._pre_reload_functions: dict[str, str] = {}  # 保存旧函数源码用于回滚
+        self._pre_reload_functions: dict[str, str] = {}
+        self._last_test_output = ""
+        self._test_passed = False
 
     def backup(self, file_path: str) -> str:
         """备份文件"""
@@ -443,18 +450,22 @@ class ArchitectureApplier:
             print(f"  [L4-GATE] 验证失败: {e}")
             return False
 
-    def apply_and_reload(self, proposal: dict, agent_instance) -> bool:
+    def apply_and_reload(self, proposal: dict, agent_instance, run_tests: bool = False) -> dict:
         """应用架构改动并动态重载受影响的模块
 
         Args:
             proposal: 代码改动方案
             agent_instance: AgentLoop 实例
+            run_tests: 是否在应用后跑自测试验证
 
         Returns:
-            是否成功
+            {"success": True/False, "test_result": "passed"/"failed"/"skipped", "test_output": "..."}
         """
+        result = {"success": False, "test_result": "skipped", "test_output": ""}
+
         if not self.apply(proposal):
-            return False
+            result["error"] = "apply_failed"
+            return result
 
         file_path = proposal.get("full_path", "")
         rel_path = self._get_relative_path(file_path)
@@ -483,7 +494,6 @@ class ArchitectureApplier:
                     except Exception:
                         pass
             elif parent_attr == "registry" and child_attr is None:
-                # Tools 文件被修改 → 重新注册所有工具
                 try:
                     from tools.builtin import register_builtin_tools
                     agent_instance.registry._tools.clear()
@@ -492,7 +502,46 @@ class ArchitectureApplier:
                 except Exception:
                     pass
 
-        return True
+        # ━━━ 自测试闭环：跑 pytest 验证改动没破坏任何东西 ━━━
+        if run_tests:
+            test_passed, test_output = self._run_tests()
+            self._test_passed = test_passed
+            self._last_test_output = test_output
+            if not test_passed:
+                self.rollback_last()
+                result["test_result"] = "failed"
+                result["test_output"] = test_output[:500]
+                result["error"] = "test_failed"
+                return result
+            result["test_result"] = "passed"
+            result["test_output"] = test_output[:200]
+
+        result["success"] = True
+        return result
+
+    @staticmethod
+    def _run_tests() -> tuple:
+        """运行 pytest 验证代码改动是否破坏现有功能
+
+        Returns:
+            (passed: bool, output: str)
+        """
+        import subprocess
+        try:
+            proc = subprocess.run(
+                ["python", "-m", "pytest", "tests/", "-q", "--tb=line"],
+                capture_output=True, timeout=60,
+                cwd=os.getcwd(),
+            )
+            raw = proc.stdout + proc.stderr
+            output = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            return proc.returncode == 0, output
+        except FileNotFoundError:
+            return False, "pytest not found"
+        except subprocess.TimeoutExpired:
+            return False, "pytest 超时 (60s)"
+        except Exception as e:
+            return False, f"pytest 执行异常: {e}"
 
     @staticmethod
     def _get_relative_path(file_path: str) -> str:
