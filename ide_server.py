@@ -89,8 +89,11 @@ def chat():
     _current_task["running"] = False
     _current_task["result"] = result
 
-    # 学习用户偏好
-    _learn_from_exchange(user_input, result)
+    # 学习用户偏好（不阻塞主响应）
+    try:
+        _learn_from_exchange(user_input, result)
+    except Exception:
+        pass
 
     # 保存会话状态（下次启动恢复）
     try:
@@ -132,8 +135,11 @@ def chat_stream():
             event_queue.put({"event": "status", "data": "thinking"})
             result = agent.run(user_input)
             event_queue.put({"event": "result", "data": result})
-            # 学习偏好
-            _learn_from_exchange(user_input, result)
+            # 学习偏好（不阻塞）
+            try:
+                _learn_from_exchange(user_input, result)
+            except Exception:
+                pass
         except Exception as e:
             event_queue.put({"event": "error", "data": str(e)})
         finally:
