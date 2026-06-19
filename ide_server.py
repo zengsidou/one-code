@@ -72,6 +72,12 @@ def chat():
     agent = get_agent()
     agent.memory.clear()
 
+    # 重新注入项目/用户/会话上下文（可能已更新）
+    global _boot_context
+    if _boot_context:
+        for msg in _boot_context:
+            agent.memory.add_message(msg)
+
     _current_task["running"] = True
     _current_task["task"] = user_input
 
@@ -82,6 +88,9 @@ def chat():
 
     _current_task["running"] = False
     _current_task["result"] = result
+
+    # 学习用户偏好
+    _learn_from_exchange(user_input, result)
 
     # 保存会话状态（下次启动恢复）
     try:
@@ -108,6 +117,12 @@ def chat_stream():
     agent = get_agent()
     agent.memory.clear()
 
+    # 重新注入上下文
+    global _boot_context
+    if _boot_context:
+        for msg in _boot_context:
+            agent.memory.add_message(msg)
+
     event_queue = queue.Queue()
 
     def run_agent():
@@ -117,6 +132,8 @@ def chat_stream():
             event_queue.put({"event": "status", "data": "thinking"})
             result = agent.run(user_input)
             event_queue.put({"event": "result", "data": result})
+            # 学习偏好
+            _learn_from_exchange(user_input, result)
         except Exception as e:
             event_queue.put({"event": "error", "data": str(e)})
         finally:
@@ -187,7 +204,39 @@ def clear():
     return jsonify({"ok": True})
 
 
-def _extract_files_from_result(result: str) -> list[str]:
+def _learn_from_exchange(user_input: str, agent_response: str):
+    """从一次对话中学习用户偏好"""
+    global _boot_context
+    if not user_input or not agent_response:
+        return
+
+    boots = ContextBootstrapper()
+
+    # 显式反馈关键词
+    feedback_keywords = {
+        "太啰嗦": ("回复风格", "更简洁"),
+        "短一点": ("回复风格", "更简洁"),
+        "太长了": ("回复风格", "更简洁"),
+        "详细": ("回复风格", "更详细"),
+        "解释一下": ("回复风格", "多解释"),
+        "说中文": ("语言", "中文"),
+        "做得好": ("反馈", "正面"),
+        "对了": ("反馈", "正面"),
+        "错了": ("反馈", "纠正"),
+        "不对": ("反馈", "纠正"),
+        "不要 commit": ("Git", "不要自动提交"),
+        "太慢了": ("速度", "加快"),
+        "简洁": ("回复风格", "简洁直接"),
+        "不要加注释": ("代码风格", "不添加注释"),
+    }
+
+    for keyword, (pref_key, pref_val) in feedback_keywords.items():
+        if keyword in user_input:
+            boots.update_preference(pref_key, pref_val)
+            boots.record_feedback(f"用户说: {user_input[:100]}")
+
+    # 重新构建启动上下文（下次回答生效）
+    _boot_context = boots.build_boot_context()
     """从 agent 返回中提取涉及的文件名"""
     import re
     files = set()
