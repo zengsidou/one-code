@@ -253,10 +253,10 @@ class AgentLoop:
             fp = hashlib.md5(raw.encode()).hexdigest()
             self._tool_fingerprints.append(fp)
             if debug:
-                print(f"  [DEBUG detect] tool={tc.name} args={tc.arguments} fp={fp[:12]} count={self._tool_fingerprints.count(fp)}")
-            if len(self._tool_fingerprints) > 20:
-                self._tool_fingerprints = self._tool_fingerprints[-20:]
-            if self._tool_fingerprints.count(fp) >= 3:
+                print(f"  [DEBUG detect] tool={tc.name} args={tc.arguments} fp={fp[:12]}")
+            # 滑动窗口：只看最近8次调用，同一指纹出现3次才触发
+            window = self._tool_fingerprints[-8:]
+            if window.count(fp) >= 3:
                 return True
         return False
 
