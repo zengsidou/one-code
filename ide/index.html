@@ -1,0 +1,172 @@
+&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;UTF-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1.0&quot;&gt;
+&lt;title&gt;Micro-Agent IDE&lt;/title&gt;
+&lt;style&gt;
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Consolas', 'Courier New', monospace; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; }
+.sidebar { width: 220px; background: #16213e; padding: 16px; display: flex; flex-direction: column; gap: 12px; border-right: 1px solid #0f3460; }
+.sidebar h2 { font-size: 14px; color: #e94560; text-transform: uppercase; letter-spacing: 1px; }
+.sidebar .stat { font-size: 12px; color: #888; }
+.sidebar .stat span { color: #00d2ff; font-weight: bold; }
+.main { flex: 1; display: flex; flex-direction: column; }
+.header { background: #16213e; padding: 12px 20px; font-size: 13px; color: #e94560; border-bottom: 1px solid #0f3460; display: flex; justify-content: space-between; align-items: center; }
+.header .status { font-size: 11px; padding: 4px 10px; border-radius: 12px; }
+.status.idle { background: #1a3a1a; color: #4caf50; }
+.status.running { background: #3a2a1a; color: #ff9800; }
+.chat { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 85%; padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.msg.user { align-self: flex-end; background: #0f3460; color: #e0e0e0; }
+.msg.agent { align-self: flex-start; background: #1a1a3e; color: #b0b0d0; border: 1px solid #2a2a5e; }
+.msg.error { align-self: flex-start; background: #3e1a1a; color: #ff6b6b; border: 1px solid #5e2a2a; }
+.msg.system { align-self: center; font-size: 11px; color: #555; background: none; padding: 4px; }
+.input-bar { display: flex; padding: 12px 16px; background: #16213e; border-top: 1px solid #0f3460; gap: 8px; }
+.input-bar input { flex: 1; padding: 10px 14px; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 6px; color: #e0e0e0; font-family: inherit; font-size: 13px; outline: none; }
+.input-bar input:focus { border-color: #e94560; }
+.input-bar button { padding: 10px 20px; background: #e94560; color: #fff; border: none; border-radius: 6px; font-family: inherit; font-size: 13px; cursor: pointer; transition: background .2s; }
+.input-bar button:hover { background: #ff6b6b; }
+.input-bar button:disabled { background: #555; cursor: not-allowed; }
+.tool-list { list-style: none; font-size: 11px; color: #777; }
+.tool-list li { padding: 2px 0; }
+.tool-list li::before { content: '▸ '; color: #e94560; }
+.thinking { animation: pulse 1s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+</style>
+&lt;/head&gt;
+&lt;body&gt;
+
+&lt;div class=&quot;sidebar&quot;&gt;
+  &lt;h2&gt;⚙ Micro-Agent&lt;/h2&gt;
+  &lt;div class=&quot;stat&quot;&gt;工具: &lt;span id=&quot;toolCount&quot;&gt;-&lt;/span&gt;&lt;/div&gt;
+  &lt;div class=&quot;stat&quot;&gt;任务: &lt;span id=&quot;taskCount&quot;&gt;-&lt;/span&gt;&lt;/div&gt;
+  &lt;div class=&quot;stat&quot;&gt;成功率: &lt;span id=&quot;successRate&quot;&gt;-&lt;/span&gt;&lt;/div&gt;
+  &lt;div class=&quot;stat&quot;&gt;技能: &lt;span id=&quot;skillCount&quot;&gt;-&lt;/span&gt;&lt;/div&gt;
+  &lt;div class=&quot;stat&quot;&gt;趋势: &lt;span id=&quot;trend&quot;&gt;-&lt;/span&gt;&lt;/div&gt;
+  &lt;hr style=&quot;border-color:#0f3460;&quot;&gt;
+  &lt;h2&gt;🔧 工具列表&lt;/h2&gt;
+  &lt;ul class=&quot;tool-list&quot; id=&quot;toolList&quot;&gt;&lt;/ul&gt;
+  &lt;hr style=&quot;border-color:#0f3460;&quot;&gt;
+  &lt;button onclick=&quot;clearMemory()&quot; style=&quot;padding:8px;background:#333;color:#aaa;border:1px solid#555;border-radius:4px;cursor:pointer;font-family:inherit;font-size:11px;&quot;&gt;清空记忆&lt;/button&gt;
+  &lt;button onclick=&quot;grow()&quot; style=&quot;padding:8px;background:#333;color:#aaa;border:1px solid#555;border-radius:4px;cursor:pointer;font-family:inherit;font-size:11px;&quot;&gt;生成挑战&lt;/button&gt;
+&lt;/div&gt;
+
+&lt;div class=&quot;main&quot;&gt;
+  &lt;div class=&quot;header&quot;&gt;
+    &lt;span&gt;Micro-Agent IDE — DeepSeek V4&lt;/span&gt;
+    &lt;span class=&quot;status idle&quot; id=&quot;statusBadge&quot;&gt;就绪&lt;/span&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;chat&quot; id=&quot;chatBox&quot;&gt;
+    &lt;div class=&quot;msg system&quot;&gt;Micro-Agent IDE 已就绪。输入任务开始。&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;input-bar&quot;&gt;
+    &lt;input type=&quot;text&quot; id=&quot;userInput&quot; placeholder=&quot;输入编程任务... (Enter 发送)&quot; onkeydown=&quot;if(event.key==='Enter') send()&quot;&gt;
+    &lt;button id=&quot;sendBtn&quot; onclick=&quot;send()&quot;&gt;发送&lt;/button&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;script&gt;
+let running = false;
+
+async function send() {
+  const input = document.getElementById('userInput');
+  const msg = input.value.trim();
+  if (!msg || running) return;
+  input.value = '';
+  running = true;
+  document.getElementById('sendBtn').disabled = true;
+  document.getElementById('statusBadge').textContent = '思考中...';
+  document.getElementById('statusBadge').className = 'status running';
+
+  addMessage(msg, 'user');
+  addMessage('&lt;span class=&quot;thinking&quot;&gt;··· 思考中 ···&lt;/span&gt;', 'system', 'thinkingMsg');
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg }),
+    });
+    const data = await res.json();
+    removeMessage('thinkingMsg');
+    if (data.error) {
+      addMessage(data.error, 'error');
+    } else {
+      addMessage(data.response, 'agent');
+    }
+  } catch (e) {
+    removeMessage('thinkingMsg');
+    addMessage('连接失败: ' + e.message, 'error');
+  }
+
+  running = false;
+  document.getElementById('sendBtn').disabled = false;
+  document.getElementById('statusBadge').textContent = '就绪';
+  document.getElementById('statusBadge').className = 'status idle';
+  updateStatus();
+  updateTools();
+}
+
+function addMessage(text, type, id) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + type;
+  if (id) div.id = id;
+  div.innerHTML = text;
+  document.getElementById('chatBox').appendChild(div);
+  document.getElementById('chatBox').scrollTop = document.getElementById('chatBox').scrollHeight;
+}
+
+function removeMessage(id) {
+  const el = document.getElementById(id);
+  if (el) el.remove();
+}
+
+async function updateStatus() {
+  try {
+    const res = await fetch('/api/status');
+    const data = await res.json();
+    document.getElementById('toolCount').textContent = data.tools || '-';
+    document.getElementById('taskCount').textContent = data.tasks || '0';
+    document.getElementById('successRate').textContent = data.success_rate || '-';
+    document.getElementById('skillCount').textContent = data.skills || '0';
+    document.getElementById('trend').textContent = data.trend || '-';
+  } catch (e) {}
+}
+
+async function updateTools() {
+  try {
+    const res = await fetch('/api/tools');
+    const data = await res.json();
+    const list = document.getElementById('toolList');
+    list.innerHTML = (data.tools || []).map(t => '&lt;li&gt;' + t + '&lt;/li&gt;').join('');
+  } catch (e) {}
+}
+
+async function clearMemory() {
+  await fetch('/api/clear', { method: 'POST' });
+  addMessage('记忆已清空', 'system');
+}
+
+async function grow() {
+  addMessage('生成挑战任务...', 'system');
+  try {
+    const res = await fetch('/api/grow', { method: 'POST' });
+    const data = await res.json();
+    const challenges = data.challenges || [];
+    let text = '挑战任务:\n';
+    challenges.forEach(c => {
+      text += `  [L${c.difficulty}] ${c.task}\n`;
+    });
+    addMessage(text, 'agent');
+  } catch (e) {
+    addMessage('生成失败: ' + e.message, 'error');
+  }
+}
+
+updateStatus();
+updateTools();
+setInterval(updateStatus, 10000);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
