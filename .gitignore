@@ -17,4 +17,7 @@ arch_backups/
 *.db
 agent_restart.flag
 agent_checkpoint.json
+test_rollback_db/
+test_diag.json
+*.traineddata
 
