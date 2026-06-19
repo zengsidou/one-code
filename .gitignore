@@ -20,4 +20,6 @@ agent_checkpoint.json
 test_rollback_db/
 test_diag.json
 *.traineddata
+user_profile.json
+session_state.json
 
