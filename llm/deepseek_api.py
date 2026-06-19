@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""DeepSeek API 适配器 — 调用 deepseek-chat (V4 Flash)，支持原生 Function Calling"""
+"""DeepSeek API 适配器 — 调用 deepseek-reasoner (DeepSeek-R1)，支持原生 Function Calling"""
 import json
 import os
 import time
@@ -19,7 +19,7 @@ class DeepSeekAdapter(BaseLLM):
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "deepseek-chat",
+        model: str = "deepseek-reasoner",
         timeout: float = 60.0,
         max_retries: int = 1,
     ):
@@ -64,7 +64,7 @@ class DeepSeekAdapter(BaseLLM):
 
                 choice = data["choices"][0]
                 msg = choice.get("message", {})
-                content = msg.get("content", "")
+                content = msg.get("content") or ""
                 raw_tool_calls = msg.get("tool_calls")
 
                 tool_calls = None

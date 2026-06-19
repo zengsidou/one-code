@@ -20,6 +20,7 @@
   <hr>
   <button onclick="clearMemory()">清空记忆</button>
   <button onclick="grow()">生成挑战</button>
+  <button id="themeBtn" onclick="toggleTheme()">🌙 深色主题</button>
 </div>
 <div class="main">
   <div class="header">
@@ -111,6 +112,25 @@ async function grow() {
   } catch (e) {
     addMessage('生成失败: ' + e.message, 'error');
   }
+}
+function toggleTheme() {
+  var body = document.body;
+  var btn = document.getElementById('themeBtn');
+  body.classList.toggle('light');
+  if (body.classList.contains('light')) {
+    btn.textContent = '🌙 深色主题';
+    localStorage.setItem('theme', 'light');
+  } else {
+    btn.textContent = '☀️ 浅色主题';
+    localStorage.setItem('theme', 'dark');
+  }
+}
+// 恢复上次主题
+if (localStorage.getItem('theme') === 'light') {
+  document.body.classList.add('light');
+  document.getElementById('themeBtn').textContent = '🌙 深色主题';
+} else {
+  document.getElementById('themeBtn').textContent = '☀️ 浅色主题';
 }
 updateStatus();
 updateTools();

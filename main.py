@@ -53,7 +53,7 @@ def main():
     if llm_type == "deepseek":
         from llm.deepseek_api import DeepSeekAdapter
         llm = DeepSeekAdapter()
-        model_name = "deepseek-chat"
+        model_name = "deepseek-reasoner"
     else:
         from llm.ollama import OllamaClient
         llm = OllamaClient(model="deepseek-r1:8b")
