@@ -830,6 +830,32 @@ class AgentLoop:
         if bottleneck.get("confidence", 0) < 0.4:
             return {"applied": False, "validated": False, "reason": "低置信度", "bottleneck": bottleneck}
 
+        # ━━━ 系统提示自优化（特殊路径：不改结构，只改 prompt 字符串）━━━
+        if bottleneck.get("bottleneck_type") == "prompt_inadequate":
+            proposal = self._arch_proposer.generate_proposal(bottleneck)
+            if not proposal:
+                return {"applied": False, "validated": False, "reason": "无法生成提示优化方案"}
+            new_code = proposal.get("new_code", "")
+            if not new_code:
+                return {"applied": False, "validated": False, "reason": "生成的提示为空"}
+            # 提取新提示文本（去掉 DEFAULT_SYSTEM_PROMPT = ( 和末尾的 )）
+            import re
+            m = re.search(r'DEFAULT_SYSTEM_PROMPT = \((.*)\)', new_code, re.DOTALL)
+            if m:
+                new_prompt_text = m.group(1).strip()
+                # 直接更新运行时 prompt（无需重启）
+                global DEFAULT_SYSTEM_PROMPT
+                DEFAULT_SYSTEM_PROMPT = new_prompt_text
+                self.system_prompt = new_prompt_text
+                # 清除缓存以使用新提示
+                if hasattr(self, "_cached_tool_desc"):
+                    delattr(self, "_cached_tool_desc")
+                print(f"  [L4-PROMPT] 系统提示已自动优化 ✓")
+                return {"applied": True, "validated": True, "self_test": "skipped",
+                        "bottleneck_type": "prompt_inadequate",
+                        "rationale": proposal.get("rationale", "提示优化")}
+            return {"applied": False, "validated": False, "reason": "无法解析新提示文本"}
+
         # 2. 生成 + 应用 + 自测试（最多重试 3 次）
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):

@@ -35,6 +35,7 @@ BOTTLENECK_DIAGNOSIS_PROMPT = """你是一个 Agent 架构师。你的 Agent 系
 - single_agent_limit: 单 Agent 无法并行处理多文件
 - no_shared_memory: Worker 之间无法共享上下文
 - tool_too_simple: 现有工具太粗糙，需要更高层工具
+- prompt_inadequate: 系统提示不够好，导致 agent 对话质量差、缺乏协作能力、回答方式不恰当
 
 同时：需要修改哪个文件来突破瓶颈？从以下选择：
 - agent/loop.py (主循环)
@@ -80,6 +81,25 @@ TOOL_GENERATION_HINT = """
 4. 工具描述要清晰说明用途和参数
 5. 参考文件中现有工具的格式
 """
+
+PROMPT_OPTIMIZATION_PROMPT = """你是 Agent 系统提示优化专家。当前的系统提示存在不足，需要改进。
+
+## 当前系统提示
+```
+{ current_prompt }
+```
+
+## 问题反馈
+{ feedback }
+
+## 修改要求
+生成改进后的完整系统提示。要求：
+1. 保留原版所有有效的规则和能力（核心工作流、行为准则、代码规范、Git 安全、工具策略）
+2. 根据问题反馈，在对话与协作能力区补充或调整指令
+3. 输出格式就是最终的 Python 字符串，不要加 def、类、或任何代码包装
+4. 保持中文为主，关键术语用英文
+
+只输出改进后的完整提示文本，不要任何解释。"""
 
 
 class ArchitectureBottleneckDetector:
@@ -246,6 +266,7 @@ class ArchitectureBottleneckDetector:
         valid_types = {
             "context_too_small", "no_task_decomposition", "no_execution_loop",
             "single_agent_limit", "no_shared_memory", "tool_too_simple",
+            "prompt_inadequate",
         }
         valid_files = {
             "agent/loop.py", "memory/short_term.py", "agent/orchestrator.py",
@@ -303,6 +324,10 @@ class ArchitectureProposalGenerator:
         if full_path is None:
             return None
 
+        # ━━━ 系统提示自优化 ━━━
+        if bottleneck.get("bottleneck_type") == "prompt_inadequate":
+            return self._generate_prompt_optimization(bottleneck, full_path)
+
         try:
             with open(full_path, "r", encoding="utf-8") as f:
                 file_content = f.read()
@@ -341,6 +366,50 @@ class ArchitectureProposalGenerator:
             return proposal
         except Exception:
             return None
+
+    def _generate_prompt_optimization(self, bottleneck: dict, full_path: str) -> dict | None:
+        """生成系统提示优化方案"""
+        import re
+
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception:
+            return None
+
+        m = re.search(r'DEFAULT_SYSTEM_PROMPT = \((.*?)\)', content, re.DOTALL)
+        if not m:
+            return None
+        current_prompt = m.group(1)
+
+        feedback = bottleneck.get("capability_gap", "Prompt needs improvement for better dialogue and collaboration.")
+
+        prompt = PROMPT_OPTIMIZATION_PROMPT.replace("{ current_prompt }", current_prompt[:4000])
+        prompt = prompt.replace("{ feedback }", feedback)
+
+        try:
+            resp = self.llm.generate(
+                [Message(role="system", content="你是 Agent 系统提示优化专家。只输出改进后的提示文本。"),
+                 Message(role="user", content=prompt)],
+                tools=None,
+            )
+            new_prompt = (resp.content or "").strip()
+            if not new_prompt or len(new_prompt) < 200:
+                return None
+        except Exception:
+            return None
+
+        old_block = f"DEFAULT_SYSTEM_PROMPT = ({current_prompt})"
+        new_block = f"DEFAULT_SYSTEM_PROMPT = ({new_prompt})"
+
+        return {
+            "full_path": full_path,
+            "old_code_hint": old_block,
+            "new_code": new_block,
+            "change_type": "modify_prompt",
+            "rationale": f"系统提示优化: {bottleneck.get('rationale', '')[:100]}",
+            "target_location": "DEFAULT_SYSTEM_PROMPT",
+        }
 
 
 class ArchitectureApplier:
