@@ -102,6 +102,8 @@ class AgentLoop:
 
         self.registry = registry or ToolRegistry()
         self.memory = memory
+        if self.memory and hasattr(self.memory, "short_term"):
+            self.memory.short_term.set_llm(self.llm)
         self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self.max_steps = max_steps
         self._tool_fingerprints: list[str] = []

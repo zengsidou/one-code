@@ -11,6 +11,7 @@ class ShortTermMemory:
         self.max_messages = max_messages
         self._messages: deque[Message] = deque()
         self._counter = TokenCounter()
+        self._llm = None  # 注入 LLM 用于智能压缩
 
     def add(self, message: Message):
         self._messages.append(message)
@@ -193,17 +194,50 @@ class ShortTermMemory:
             elif avg_usage < self.max_tokens * 0.3 and self.max_tokens > 16384:
                 self.max_tokens = max(self.max_tokens // 2, 16384)
 
+    def set_llm(self, llm):
+        """注入 LLM 适配器用于智能压缩"""
+        self._llm = llm
+
     def _llm_summarize(self, messages: list[Message]) -> Message:
-        """使用LLM生成消息摘要，以压缩token占用。
-        将最旧的一批消息（例如前10条）合并为一条system摘要消息。
+        """LLM 驱动对话压缩 — 对标 MiMoCode compaction
+
+        将一段对话历史压缩为结构化摘要：
+        - 目标(Goal): 用户想要什么
+        - 已完成(Accomplished): 做了哪些操作
+        - 发现(Findings): 关键发现
+        - 相关文件(Files): 涉及的文件
         """
-        # 简单实现：拼接消息内容并截断，实际可调用LLM API
-        combined = "\n".join(
-            f"{msg.role}: {str(msg.content or '')[:200]}" for msg in messages
+        if not self._llm or len(messages) < 4:
+            text = "\n".join(f"{m.role}: {str(m.content or '')[:100]}" for m in messages)
+            return Message(role="system", content=f"[对话摘要] {text[:400]}")
+
+        conversation = []
+        for m in messages:
+            role = m.role
+            c = str(m.content or "")[:300]
+            if m.tool_calls:
+                c += f" [调用了: {', '.join(tc.name for tc in m.tool_calls)}]"
+            conversation.append(f"[{role}] {c}")
+
+        prompt = (
+            "将以下对话历史压缩为结构化摘要。只输出摘要，不要解释。\n\n"
+            + "\n".join(conversation[-30:])
+            + "\n\n压缩格式:\n"
+            "目标: <用户想达成什么>\n"
+            "已完成: <已经做了哪些操作>\n"
+            "发现: <关键发现或错误>\n"
+            "涉及文件: <文件列表>"
         )
-        # 模拟LLM摘要（实际应调用LLM）
-        summary_text = f"[LLM摘要] {combined[:500]}"
-        return Message(role="system", content=summary_text)
+        try:
+            resp = self._llm.generate(
+                [Message(role="user", content=prompt)],
+                tools=None,
+            )
+            summary = (resp.content or "")[:600]
+            return Message(role="system", content=f"[LLM压缩] {summary}")
+        except Exception:
+            text = "\n".join(f"{m.role}: {str(m.content or '')[:100]}" for m in messages)
+            return Message(role="system", content=f"[对话摘要] {text[:400]}")
 
     def _aggressive_compress(self):
         """激进压缩：当常规压缩后仍超限时，使用LLM摘要压缩最旧的消息块。"""
