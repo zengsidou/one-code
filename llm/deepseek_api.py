@@ -19,7 +19,7 @@ class DeepSeekAdapter(BaseLLM):
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "deepseek-reasoner",
+        model: str = "deepseek-v4-pro",
         timeout: float = 60.0,
         max_retries: int = 1,
     ):
@@ -44,6 +44,7 @@ class DeepSeekAdapter(BaseLLM):
                     "model": self.model,
                     "messages": api_messages,
                     "temperature": 0.3,
+                    "max_tokens": 4096,
                     "stream": False,
                 }
                 if tools:
