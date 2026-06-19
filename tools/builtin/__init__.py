@@ -221,6 +221,59 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
 
         return f"搜索 '{query}' 无结果。DuckDuckGo/Bing/Tavily 均不可用。"
 
+    @registry.register("fetch_url", "抓取指定 URL 的完整网页内容（Markdown 格式）。配合 search_web 使用：搜出结果→选 URL→fetch 全文。format 可选 markdown/text/html")
+    def fetch_url(url: str, format: str = "markdown") -> str:
+        import re, httpx
+
+        try:
+            r = httpx.get(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; MicroAgent/1.0)"},
+                follow_redirects=True,
+                timeout=15,
+            )
+            if r.status_code != 200:
+                return f"[ERROR] HTTP {r.status_code}"
+
+            content_type = r.headers.get("content-type", "")
+            charset = "utf-8"
+            m = re.search(r'charset=([^\s;]+)', content_type)
+            if m:
+                charset = m.group(1)
+            html = r.content.decode(charset, errors="replace")
+
+            if format == "html":
+                return html[:8000]
+
+            if format == "text":
+                text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
+                text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
+                text = re.sub(r"<[^>]+>", " ", text)
+                text = re.sub(r"\s+", " ", text).strip()
+                return text[:6000]
+
+            # Default: markdown
+            try:
+                import html2text
+                h = html2text.HTML2Text()
+                h.ignore_links = False
+                h.ignore_images = True
+                h.body_width = 0
+                h.ignore_emphasis = False
+                md = h.handle(html)
+                return md[:6000]
+            except ImportError:
+                text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
+                text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
+                text = re.sub(r"<[^>]+>", " ", text)
+                text = re.sub(r"\s+", " ", text).strip()
+                return f"(html2text 未安装，返回纯文本)\n{text[:6000]}"
+
+        except httpx.ConnectTimeout:
+            return f"[ERROR] 连接 {url} 超时"
+        except Exception as e:
+            return f"[ERROR] {e}"
+
     @registry.register("calculate", "执行数学计算，支持加减乘除、幂运算、三角函数等")
     def calculate(expression: str) -> str:
         import math
