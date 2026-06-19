@@ -16,6 +16,7 @@ from tools.builtin import register_builtin_tools
 from memory.short_term import ShortTermMemory
 from memory.long_term import LongTermMemory
 from memory import MemoryManager
+from memory.context_boot import ContextBootstrapper
 from agent.loop import AgentLoop
 from llm.deepseek_api import DeepSeekAdapter
 
@@ -42,10 +43,18 @@ def get_agent() -> AgentLoop:
             long=LongTermMemory(llm, persist_dir=os.path.join(IDE_DIR, "chroma_data")),
         )
         _agent = AgentLoop(
-            llm=llm, registry=registry, memory=memory, max_steps=15,
+            llm=llm, registry=registry, memory=memory, max_steps=20,
             enable_evolution=True, enable_self_optimize=False,
         )
+        _bootstrapper = ContextBootstrapper()
+        _boot_context = _bootstrapper.build_boot_context()
+        if _boot_context:
+            for msg in _boot_context:
+                _agent.memory.add_message(msg)
     return _agent
+
+_bootstrapper = None
+_boot_context = None
 
 
 @app.route("/")
@@ -73,6 +82,14 @@ def chat():
 
     _current_task["running"] = False
     _current_task["result"] = result
+
+    # 保存会话状态（下次启动恢复）
+    try:
+        b = ContextBootstrapper()
+        files = _extract_files_from_result(result)
+        b.save_session(user_input, files)
+    except Exception:
+        pass
 
     return jsonify({"response": result})
 
@@ -168,6 +185,17 @@ def clear():
     agent = get_agent()
     agent.memory.clear()
     return jsonify({"ok": True})
+
+
+def _extract_files_from_result(result: str) -> list[str]:
+    """从 agent 返回中提取涉及的文件名"""
+    import re
+    files = set()
+    # 匹配 File written: path, 已替换 path, 修复 path
+    for pat in [r"File written:\s*(\S+)", r"已替换\s*(\S+)", r"修复\s*(\S+\.py)"]:
+        for m in re.finditer(pat, result):
+            files.add(m.group(1))
+    return list(files)[:5]
 
 
 def main():

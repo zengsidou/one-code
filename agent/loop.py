@@ -162,7 +162,7 @@ class AgentLoop:
         self._step_trace: list[str] = []
         self._last_step_count = 0
 
-    def run(self, user_input: str, debug: bool = False) -> str:
+    def run(self, user_input: str, debug: bool = False, boot_context: list[Message] | None = None) -> str:
         # 检查是否是重启恢复
         if AgentCheckpoint.has_restart_flag():
             AgentCheckpoint.clear_restart_flag()
@@ -180,6 +180,12 @@ class AgentLoop:
         self._last_step_count = 0
         if self.enable_self_optimize:
             self._last_failure_cases.clear()
+
+        # ━━━ 注入启动上下文（首次运行） ━━━
+        if boot_context and not self._step_trace:
+            for msg in boot_context:
+                self.memory.add_message(msg)
+
         self.memory.add_message(Message(role="user", content=user_input))
 
         # ━━━ 硬编码搜索触发 ━━━
