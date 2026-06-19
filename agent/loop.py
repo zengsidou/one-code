@@ -506,19 +506,19 @@ class AgentLoop:
         is_failure = "[STOPPED]" in result or "[ERROR]" in result
         step_count = self._last_step_count
 
-        # Token优化：轻量级任务跳过 LLM 复盘
-        if not is_failure and step_count <= 3 and len(trace) < 200:
+        # Token优化：仅1-2步成功任务跳过 LLM 复盘
+        if not is_failure and step_count <= 2:
             reflection = {
                 "outcome": "success",
                 "difficulty_for_agent": 1,
-                "difficulty_evidence": "轻量任务，跳过深度复盘",
-                "what_worked": ["快速完成简单任务"],
+                "difficulty_evidence": "1-2步完成，轻量任务",
+                "what_worked": ["路径直接，无冗余操作"],
                 "what_could_be_better": [],
-                "strategy_used": "直接执行",
+                "strategy_used": "直接定位并修复",
                 "new_skill_gained": {"name": "", "description": "", "reusable": False, "trigger": "", "steps": ""},
                 "efficiency_score": 5,
-                "efficiency_evidence": "轻量任务",
-                "growth_insight": f"熟练完成: {task_desc[:60]}",
+                "efficiency_evidence": "无冗余步数",
+                "growth_insight": f"快速定位并修复: {task_desc[:60]}",
                 "task_desc": task_desc[:200],
                 "timestamp": "",
                 "result_preview": result[:100],
