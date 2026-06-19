@@ -85,6 +85,14 @@ class DeepSeekAdapter(BaseLLM):
 
             except httpx.HTTPStatusError as e:
                 last_error = e
+                # 400 = orphaned tool messages → 清理后重试
+                if e.response.status_code == 400 and tools:
+                    cleaned = self._clean_orphaned_tools(api_messages)
+                    if len(cleaned) < len(api_messages):
+                        api_messages = cleaned
+                        if attempt < self.max_retries + 1:
+                            time.sleep(0.5)
+                            continue
                 if attempt < self.max_retries:
                     time.sleep(1)
             except Exception as e:
@@ -119,6 +127,19 @@ class DeepSeekAdapter(BaseLLM):
                 entry["tool_name"] = m.tool_name
             api_messages.append(entry)
         return api_messages
+
+    @staticmethod
+    def _clean_orphaned_tools(messages: list[dict]) -> list[dict]:
+        """移除孤立的 tool 消息（前面没有 assistant[tool_calls]）"""
+        cleaned = []
+        for m in messages:
+            role = m.get("role", "")
+            if role == "tool":
+                if cleaned and cleaned[-1].get("role") == "assistant" and cleaned[-1].get("tool_calls"):
+                    cleaned.append(m)
+            else:
+                cleaned.append(m)
+        return cleaned
 
     @staticmethod
     def _safe_parse_json(raw: str) -> dict:
