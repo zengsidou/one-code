@@ -205,42 +205,85 @@ def clear():
 
 
 def _learn_from_exchange(user_input: str, agent_response: str):
-    """从一次对话中学习用户偏好"""
+    """Agent 自反思对话质量，更新自己的行为偏好
+
+    不使用硬编码规则——让 agent 用自己的 LLM 分析：
+    1. 我的回答是否合适？
+    2. 用户看起来满意还是不满？
+    3. 下次我应该怎么调整？
+    """
     global _boot_context
-    if not user_input or not agent_response:
+    if not user_input or not agent_response or len(agent_response) < 10:
         return
 
+    try:
+        agent = get_agent()
+        # 用 agent 自己的 LLM 做对话质量自反思
+        reflection_prompt = (
+            "你刚和用户完成了一次对话。请反思你的回答质量。\n\n"
+            f"用户说: {user_input[:300]}\n\n"
+            f"你的回答（摘要）: {agent_response[:500]}\n\n"
+            "请分析:\n"
+            "1. 用户满意吗？(非常满意 / 还行 / 不满意)\n"
+            "2. 回答长度合适吗？(太长 / 合适 / 太短)\n"
+            "3. 回答风格合适吗？(太啰嗦 / 合适 / 太干瘪)\n"
+            "4. 下次类似问题，你应该怎么调整？(一句话建议)\n\n"
+            "只输出分析，不要额外解释。"
+        )
+        resp = agent.llm.generate(
+            [Message(role="user", content=reflection_prompt)],
+            tools=None,
+        )
+        reflection = (resp.content or "")[:500]
+    except Exception:
+        return
+
+    # 从自反思中提取行为调整，构建下一次对话的自我提示
     boots = ContextBootstrapper()
+    self_guidance = _extract_self_guidance(reflection)
+    if self_guidance:
+        boots.update_preference("上次反思", self_guidance)
 
-    # 显式反馈关键词
-    feedback_keywords = {
-        "太啰嗦": ("回复风格", "更简洁"),
-        "短一点": ("回复风格", "更简洁"),
-        "太长了": ("回复风格", "更简洁"),
-        "详细": ("回复风格", "更详细"),
-        "解释一下": ("回复风格", "多解释"),
-        "说中文": ("语言", "中文"),
-        "做得好": ("反馈", "正面"),
-        "对了": ("反馈", "正面"),
-        "错了": ("反馈", "纠正"),
-        "不对": ("反馈", "纠正"),
-        "不要 commit": ("Git", "不要自动提交"),
-        "太慢了": ("速度", "加快"),
-        "简洁": ("回复风格", "简洁直接"),
-        "不要加注释": ("代码风格", "不添加注释"),
-    }
+    # 记录反思历史
+    boots.record_feedback(f"[自反思] 用户: {user_input[:60]} | 反思: {reflection[:150]}")
 
-    for keyword, (pref_key, pref_val) in feedback_keywords.items():
-        if keyword in user_input:
-            boots.update_preference(pref_key, pref_val)
-            boots.record_feedback(f"用户说: {user_input[:100]}")
-
-    # 重新构建启动上下文（下次回答生效）
+    # 重新构建启动上下文（融入新的自我认知）
     _boot_context = boots.build_boot_context()
+
+    # 将在下次对话前注入自我提示
+    if self_guidance and _boot_context:
+        _boot_context.append(Message(
+            role="system",
+            content=f"[自我提示] 上次对话后，我反思了自己的表现: {self_guidance}"
+        ))
     """从 agent 返回中提取涉及的文件名"""
     import re
     files = set()
     # 匹配 File written: path, 已替换 path, 修复 path
+    for pat in [r"File written:\s*(\S+)", r"已替换\s*(\S+)", r"修复\s*(\S+\.py)"]:
+        for m in re.finditer(pat, result):
+            files.add(m.group(1))
+    return list(files)[:5]
+
+
+def _extract_self_guidance(reflection: str) -> str:
+    """从 LLM 自反思中提取行为指导"""
+    guidance_parts = []
+    if "太长" in reflection:
+        guidance_parts.append("回答应该更简洁")
+    if "太短" in reflection or "太干瘪" in reflection:
+        guidance_parts.append("回答应该更详细")
+    if "太啰嗦" in reflection:
+        guidance_parts.append("去掉冗余废话，直接给结论")
+    if "不满意" in reflection:
+        guidance_parts.append("用户可能不满意，需要调整回答方式")
+    return ", ".join(guidance_parts) if guidance_parts else ""
+
+
+def _extract_files_from_result(result: str) -> list[str]:
+    """从 agent 返回中提取涉及的文件名"""
+    import re
+    files = set()
     for pat in [r"File written:\s*(\S+)", r"已替换\s*(\S+)", r"修复\s*(\S+\.py)"]:
         for m in re.finditer(pat, result):
             files.add(m.group(1))
