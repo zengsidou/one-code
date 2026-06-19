@@ -38,6 +38,7 @@ class DeepSeekAdapter(BaseLLM):
         api_messages = self._build_api_messages(messages)
 
         last_error = None
+        last_error_body = ""
         for attempt in range(self.max_retries + 1):
             try:
                 body: dict[str, Any] = {
@@ -85,6 +86,10 @@ class DeepSeekAdapter(BaseLLM):
 
             except httpx.HTTPStatusError as e:
                 last_error = e
+                try:
+                    last_error_body = str(e.response.json().get("error", {}).get("message", ""))
+                except Exception:
+                    last_error_body = e.response.text[:300]
                 # 400 = orphaned tool messages → 清理后重试
                 if e.response.status_code == 400 and tools:
                     cleaned = self._clean_orphaned_tools(api_messages)
@@ -100,7 +105,10 @@ class DeepSeekAdapter(BaseLLM):
                 if attempt < self.max_retries:
                     time.sleep(1)
 
-        return Message(role="assistant", content=f"[LLM error: {last_error}]")
+        err_msg = f"[LLM error: {last_error}]"
+        if last_error_body:
+            err_msg += f" (API: {last_error_body[:200]})"
+        return Message(role="assistant", content=err_msg)
 
     def _build_api_messages(self, messages: list[Message]) -> list[dict]:
         """将内部 Message 列表转换为 DeepSeek API 格式"""
