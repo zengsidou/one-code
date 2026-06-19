@@ -147,70 +147,79 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
                 return f"[{result['blocked_by'] or 'ERROR'}] {result['error']}"
         return run_shell(command, timeout)
 
-    @registry.register("search_web", "网络搜索，免费版用 DuckDuckGo（ddgs 库），高级版可选 Tavily/SerpAPI")
+    @registry.register("search_web", "Bing 网络搜索（免费，国内可用，超时 10 秒）")
     def search_web(query: str) -> str:
-        import os
+        import re, os, threading
 
-        # 方案 1: DuckDuckGo（免费，无需 API key）
+        # DuckDuckGo 备用（优先避免被封 IP）
         try:
             from ddgs import DDGS
-            results = list(DDGS().text(query, max_results=5))
-            if results:
+            results_holder = []
+            def _ddg():
+                try:
+                    results_holder.extend(list(DDGS().text(query, max_results=5)))
+                except Exception:
+                    pass
+            t = threading.Thread(target=_ddg, daemon=True)
+            t.start()
+            t.join(timeout=8)
+            if results_holder:
                 lines = [f"搜索 '{query}':"]
-                for i, r in enumerate(results[:5], 1):
-                    title = r.get("title", "")
-                    href = r.get("href", "")
-                    body = r.get("body", "")[:300]
-                    lines.append(f"{i}. {title}\n   {href}\n   {body}")
+                for i, r in enumerate(results_holder[:5], 1):
+                    lines.append(f"{i}. {r.get('title','')[:80]}\n   {r.get('href','')}\n   {r.get('body','')[:200]}")
                 return "\n".join(lines)
+        except ImportError:
+            pass
+
+        # Bing 搜索（主方案，国内稳定）
+        try:
+            import httpx
+            r = httpx.get(
+                "https://cn.bing.com/search",
+                params={"q": query, "setlang": "zh-cn"},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                follow_redirects=True, timeout=10,
+            )
+            if r.status_code == 200:
+                # 提取搜索结果
+                results = []
+                blocks = re.split(r'<li class="b_algo"', r.text)
+                for block in blocks[1:6]:
+                    title_m = re.search(r'<a[^>]*href="(https?://[^"]+)"[^>]*>(.+?)</a>', block)
+                    if title_m:
+                        url = title_m.group(1)
+                        title = re.sub(r'<[^>]+>', '', title_m.group(2)).strip()
+                        snippet_m = re.search(r'<p[^>]*>(.+?)</p>', block, re.DOTALL)
+                        snippet = re.sub(r'<[^>]+>', '', snippet_m.group(1)).strip()[:200] if snippet_m else ""
+                        results.append((title, url, snippet))
+                if results:
+                    lines = [f"Bing 搜索 '{query}':"]
+                    for i, (title, url, snippet) in enumerate(results[:5], 1):
+                        lines.append(f"{i}. {title}\n   {url}\n   {snippet}")
+                    return "\n".join(lines)
+        except ImportError:
+            pass
         except Exception:
             pass
 
-        # 方案 2: Tavily
+        # Tavily 备用
         tavily_key = os.environ.get("TAVILY_API_KEY") or os.environ.get("tavily_api_key")
         if tavily_key:
             try:
                 import httpx
-                resp = httpx.post(
-                    "https://api.tavily.com/search",
-                    json={"api_key": tavily_key, "query": query, "max_results": 5},
-                    timeout=15,
-                )
+                resp = httpx.post("https://api.tavily.com/search", json={"api_key": tavily_key, "query": query, "max_results": 5}, timeout=15)
                 if resp.status_code == 200:
                     data = resp.json()
                     results = data.get("results", [])
                     if results:
-                        lines = [f"Tavily 搜索结果 ({data.get('answer', '')}):"]
+                        lines = [f"Tavily 搜索结果:"]
                         for i, r in enumerate(results[:5], 1):
-                            lines.append(f"{i}. {r.get('title', '')}\n   {r.get('url', '')}\n   {r.get('content', '')[:200]}")
+                            lines.append(f"{i}. {r.get('title','')}\n   {r.get('url','')}\n   {r.get('content','')[:200]}")
                         return "\n".join(lines)
-                return "[Tavily ERROR] 无结果"
-            except Exception as e:
-                return f"[Tavily ERROR] {e}"
+            except Exception:
+                pass
 
-        # 方案 3: SerpAPI
-        serp_key = os.environ.get("SERPAPI_API_KEY") or os.environ.get("serpapi_api_key")
-        if serp_key:
-            try:
-                import httpx
-                resp = httpx.get(
-                    "https://serpapi.com/search",
-                    params={"api_key": serp_key, "q": query, "engine": "google", "num": 5},
-                    timeout=15,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    organic = data.get("organic_results", [])
-                    if organic:
-                        lines = ["SerpAPI 搜索结果:"]
-                        for i, r in enumerate(organic[:5], 1):
-                            lines.append(f"{i}. {r.get('title', '')}\n   {r.get('link', '')}\n   {r.get('snippet', '')[:200]}")
-                        return "\n".join(lines)
-                return "[SerpAPI ERROR] 无结果"
-            except Exception as e:
-                return f"[SerpAPI ERROR] {e}"
-
-        return f"搜索 '{query}' 无结果。（DuckDuckGo 已启用，如需更好效果可设置 TAVILY_API_KEY 或 SERPAPI_API_KEY）"
+        return f"搜索 '{query}' 无结果。DuckDuckGo/Bing/Tavily 均不可用。"
 
     @registry.register("calculate", "执行数学计算，支持加减乘除、幂运算、三角函数等")
     def calculate(expression: str) -> str:
