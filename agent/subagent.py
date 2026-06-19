@@ -1,14 +1,17 @@
 # -*- coding: utf-8 -*-
-"""SubAgent — 轻量子代理，被主 Agent 委派执行子任务"""
+"""SubAgent — 上下文隔离子代理，带返回格式契约和生命周期管理"""
 from agent.models import Message
 from llm.base import BaseLLM
 from tools.registry import ToolRegistry
 
 
-DEFAULT_SUBAGENT_PROMPT = (
-    "你是一个专注于特定子任务的 AI Agent。\n"
-    "请严格遵循任务要求，使用可用工具完成任务，然后给出简洁结果。\n"
-    "不要在结果中添加无关解释。"
+RETURN_FORMAT_INSTRUCTION = (
+    "返回格式（必须遵守）:\n"
+    "你的最终回复必须以以下格式开头:\n"
+    "**Status**: success | partial | failed | blocked\n"
+    "**Summary**: <一句话描述>\n\n"
+    "然后才是正文内容。\n"
+    "不要跳过这个格式头。"
 )
 
 
@@ -18,62 +21,72 @@ class SubAgent:
         llm: BaseLLM,
         registry: ToolRegistry,
         prompt: str = "",
-        max_steps: int = 5,
+        max_steps: int = 8,
+        context: list[Message] | None = None,
     ):
         self.llm = llm
         self.registry = registry
-        self.prompt = prompt or DEFAULT_SUBAGENT_PROMPT
         self.max_steps = max_steps
+        self._context: list[Message] = context or []
+        base_prompt = prompt or (
+            "你是 Micro-Agent 子代理，专注于执行单个子任务。"
+            "使用可用工具完成任务，给出简洁结果。"
+        )
+        self.prompt = base_prompt + "\n\n" + RETURN_FORMAT_INSTRUCTION
 
     def run(self, task: str) -> str:
-        messages: list[Message] = [
-            Message(role="system", content=self.prompt),
-            Message(role="user", content=task),
-        ]
+        messages = list(self._context)
+        messages.append(Message(role="system", content=self.prompt))
+        messages.append(Message(role="user", content=task))
         last_tool_result = ""
 
         for step in range(self.max_steps):
-            # Nudge if we have tool results from previous step
             context = list(messages)
             if last_tool_result and step > 0:
                 context.append(Message(
                     role="system",
-                    content=(
-                        "工具已返回结果。请直接引用以上结果给出简洁的最终中文回复，不要再调用工具。"
-                        f"\n工具返回的实际数据:\n{last_tool_result[:300]}"
-                    ),
+                    content="工具已返回结果。基于结果给出最终中文回复（带 Status/Summary 头）。不要继续调用工具。"
                 ))
 
             response = self.llm.generate(context, tools=self.registry.get_schemas())
-
             tool_calls = response.tool_calls or []
 
             if not tool_calls:
                 content = response.content or ""
                 messages.append(Message(role="assistant", content=content, reasoning_content=response.reasoning_content))
-                return content
+                return self._parse_result(content)
 
+            import json
             for tc in tool_calls:
-                import json
                 messages.append(Message(
                     role="assistant",
-                    content=f"调用工具: {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})",
+                    content=f"调用工具: {tc.name}",
                     tool_calls=[tc],
                     reasoning_content=response.reasoning_content,
                 ))
-
                 result = self.registry.execute(tc.name, tc.arguments)
                 messages.append(Message(
-                    role="tool",
-                    content=result,
-                    tool_call_id=tc.id,
-                    tool_name=tc.name,
+                    role="tool", content=result,
+                    tool_call_id=tc.id, tool_name=tc.name,
                 ))
                 last_tool_result = result
 
-        messages.append(Message(
-            role="system",
-            content="已达到最大步骤限制。请基于以上所有信息给出最终结果。",
-        ))
+        messages.append(Message(role="system", content="已达到最大步骤限制。请基于已有信息给出最终结果（带 Status/Summary 头）。"))
         final = self.llm.generate(messages, tools=None)
-        return final.content or "子任务未能完成。"
+        return self._parse_result(final.content or "子任务未能完成。")
+
+    @staticmethod
+    def _parse_result(text: str) -> str:
+        """解析子代理返回内容，提取 Status/Summary"""
+        status = "success"
+        summary = ""
+        body = text
+        for line in text.split("\n"):
+            line_stripped = line.strip()
+            if line_stripped.startswith("**Status**:"):
+                status = line_stripped.split(":", 1)[1].strip().lower().split()[0]
+            elif line_stripped.startswith("**Summary**:"):
+                summary = line_stripped.split(":", 1)[1].strip()
+        if summary:
+            return f"[{status}] {summary}"
+        return body[:500]

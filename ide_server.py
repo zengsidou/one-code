@@ -77,6 +77,51 @@ def chat():
     return jsonify({"response": result})
 
 
+@app.route("/api/chat/stream", methods=["POST"])
+def chat_stream():
+    """SSE 流式聊天——逐步推送思考过程"""
+    import threading, queue
+    from flask import Response
+
+    data = request.get_json()
+    user_input = data.get("message", "").strip()
+    if not user_input:
+        return jsonify({"error": "Empty message"}), 400
+
+    agent = get_agent()
+    agent.memory.clear()
+
+    event_queue = queue.Queue()
+
+    def run_agent():
+        _current_task["running"] = True
+        _current_task["task"] = user_input
+        try:
+            event_queue.put({"event": "status", "data": "thinking"})
+            result = agent.run(user_input)
+            event_queue.put({"event": "result", "data": result})
+        except Exception as e:
+            event_queue.put({"event": "error", "data": str(e)})
+        finally:
+            _current_task["running"] = False
+            event_queue.put({"event": "done", "data": ""})
+
+    threading.Thread(target=run_agent, daemon=True).start()
+
+    def generate():
+        while True:
+            try:
+                evt = event_queue.get(timeout=120)
+                yield f"event: {evt['event']}\ndata: {evt['data']}\n\n"
+                if evt["event"] in ("done", "error"):
+                    break
+            except queue.Empty:
+                yield "event: error\ndata: timeout\n\n"
+                break
+
+    return Response(generate(), mimetype="text/event-stream")
+
+
 @app.route("/api/status", methods=["GET"])
 def status():
     agent = get_agent()
