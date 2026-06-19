@@ -23,7 +23,10 @@ class ShortTermMemory:
         return self._counter.count_messages(list(self._messages))
 
     def _manage(self):
-        """管理窗口大小：基于 token 计数分层压缩，优先压缩 tool 链，再压缩旧对话对"""
+        """管理窗口大小：基于 token 计数分层压缩，优先压缩 tool 链，再压缩旧对话对，最后转移至长期记忆。
+        同时动态调整 max_tokens 以缓解上下文过小瓶颈。
+        """
+        self._adjust_max_tokens()
         total = self.get_token_count()
 
         # 第一层：如果超限，先压缩 tool 链（通常 token 多且价值低）
@@ -36,7 +39,17 @@ class ShortTermMemory:
             self._summarize_old_pairs()
             total = self.get_token_count()
 
-        # 第三层：如果仍然超限，裁剪最旧消息（保留至少 2 条）
+        # 第三层：如果仍然超限，转移至长期记忆
+        if total > self.max_tokens:
+            self._transfer_to_long_term()
+            total = self.get_token_count()
+
+        # 第四层：如果仍然超限，使用LLM摘要压缩最旧消息块
+        if total > self.max_tokens:
+            self._aggressive_compress()
+            total = self.get_token_count()
+
+        # 第五层：如果仍然超限，裁剪最旧消息（保留至少 2 条）
         while total > self.max_tokens and len(self._messages) > 2:
             old = self._messages.popleft()
             total = self.get_token_count()
@@ -131,3 +144,88 @@ class ShortTermMemory:
 
     def __len__(self):
         return len(self._messages)
+
+    def _transfer_to_long_term(self):
+        """将最旧的消息转移到长期记忆存储，以释放短期记忆空间。
+        转移策略：保留最近的 N 条消息（例如 50 条），将更旧的消息打包为摘要并存储到长期记忆。
+        """
+        if len(self._messages) < 50:
+            return
+        # 保留最近 50 条消息
+        keep_count = 50
+        old_messages = list(self._messages)[:-keep_count]
+        self._messages = deque(list(self._messages)[-keep_count:])
+        # 将旧消息打包为摘要（简单拼接，实际可调用 LLM 生成摘要）
+        summary_content = "\n".join(
+            f"{msg.role}: {str(msg.content or '')[:200]}" for msg in old_messages
+        )
+        # 假设存在长期记忆存储模块（需导入或注入）
+        # 这里使用一个简单的内存字典模拟，实际应集成到持久化存储
+        if not hasattr(self, '_long_term_store'):
+            self._long_term_store = []
+        self._long_term_store.append({
+            'summary': summary_content,
+            'token_count': self._counter.count_messages(old_messages)
+        })
+
+    def retrieve_from_long_term(self, query: str) -> list[Message]:
+        """根据查询从长期记忆中检索相关消息。
+        简单实现：返回所有长期记忆摘要作为 system 消息。
+        """
+        if not hasattr(self, '_long_term_store') or not self._long_term_store:
+            return []
+        # 将所有摘要合并为一条 system 消息
+        combined = "\n---\n".join(item['summary'] for item in self._long_term_store)
+        return [Message(role="system", content=f"[长期记忆摘要]\n{combined}")]
+
+    def _adjust_max_tokens(self):
+        """根据历史使用模式动态调整最大token数，以缓解上下文过小瓶颈。"""
+        if not hasattr(self, '_usage_history'):
+            self._usage_history = []
+        current_count = self.get_token_count()
+        self._usage_history.append(current_count)
+        if len(self._usage_history) > 100:
+            self._usage_history.pop(0)
+        if len(self._usage_history) >= 10:
+            avg_usage = sum(self._usage_history[-10:]) / 10
+            if avg_usage > self.max_tokens * 0.9 and self.max_tokens < 131072:
+                self.max_tokens = min(self.max_tokens * 2, 131072)
+            elif avg_usage < self.max_tokens * 0.3 and self.max_tokens > 16384:
+                self.max_tokens = max(self.max_tokens // 2, 16384)
+
+    def _llm_summarize(self, messages: list[Message]) -> Message:
+        """使用LLM生成消息摘要，以压缩token占用。
+        将最旧的一批消息（例如前10条）合并为一条system摘要消息。
+        """
+        # 简单实现：拼接消息内容并截断，实际可调用LLM API
+        combined = "\n".join(
+            f"{msg.role}: {str(msg.content or '')[:200]}" for msg in messages
+        )
+        # 模拟LLM摘要（实际应调用LLM）
+        summary_text = f"[LLM摘要] {combined[:500]}"
+        return Message(role="system", content=summary_text)
+
+    def _aggressive_compress(self):
+        """激进压缩：当常规压缩后仍超限时，使用LLM摘要压缩最旧的消息块。"""
+        if len(self._messages) < 10:
+            return
+        # 取最旧的10条消息（跳过system）
+        msgs = list(self._messages)
+        # 找到第一条非system消息
+        start_idx = 0
+        for idx, msg in enumerate(msgs):
+            if msg.role != "system":
+                start_idx = idx
+                break
+        if start_idx >= len(msgs) - 2:
+            return
+        # 压缩从start_idx开始的10条消息（或剩余消息的一半，取较小值）
+        compress_count = min(10, (len(msgs) - start_idx) // 2)
+        if compress_count < 2:
+            return
+        old_chunk = msgs[start_idx:start_idx + compress_count]
+        summary = self._llm_summarize(old_chunk)
+        # 替换为摘要
+        new_msgs = msgs[:start_idx] + [summary] + msgs[start_idx + compress_count:]
+        self._messages = deque(new_msgs)
+
