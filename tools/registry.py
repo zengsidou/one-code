@@ -85,8 +85,9 @@ class ToolRegistry:
 def run_shell(command: str, timeout: int = 30) -> str:
     shell_cmd = ["powershell", "-Command", command] if platform.system() == "Windows" else ["bash", "-c", command]
     try:
-        result = subprocess.run(shell_cmd, capture_output=True, text=True, timeout=timeout)
-        output = result.stdout.strip() or result.stderr.strip() or "(no output)"
+        result = subprocess.run(shell_cmd, capture_output=True, timeout=timeout)
+        raw = result.stdout or result.stderr or b"(no output)"
+        output = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
         return output[:4000]
     except subprocess.TimeoutExpired:
         return f"[ERROR] Command timed out after {timeout}s"
