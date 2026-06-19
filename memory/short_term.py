@@ -23,14 +23,20 @@ class ShortTermMemory:
         return self._counter.count_messages(list(self._messages))
 
     def _manage(self):
-        """管理窗口大小：超过 token 上限先摘要，再裁剪"""
+        """管理窗口大小：基于 token 计数分层压缩，优先压缩 tool 链，再压缩旧对话对"""
         total = self.get_token_count()
 
+        # 第一层：如果超限，先压缩 tool 链（通常 token 多且价值低）
+        if total > self.max_tokens:
+            self._compress_tool_chains()
+            total = self.get_token_count()
+
+        # 第二层：如果仍然超限，压缩旧对话对
         if total > self.max_tokens:
             self._summarize_old_pairs()
+            total = self.get_token_count()
 
-        # 如果摘要后仍然超限，裁剪最旧消息
-        total = self.get_token_count()
+        # 第三层：如果仍然超限，裁剪最旧消息（保留至少 2 条）
         while total > self.max_tokens and len(self._messages) > 2:
             old = self._messages.popleft()
             total = self.get_token_count()
@@ -44,6 +50,42 @@ class ShortTermMemory:
             self._messages.popleft()
             while self._messages and self._messages[0].role == "tool":
                 self._messages.popleft()
+
+    def _compress_tool_chains(self):
+        """压缩 tool 链：将 assistant[tool_calls] + 后续 tool 消息合并为摘要。
+        
+        保留 DeepSeek API 兼容性：tool 链必须完整移除（assistant+tool_calls 与其 tool 响应一起），
+        避免留下孤立的 tool 消息。
+        """
+        msgs = list(self._messages)
+        if len(msgs) < 4:
+            return
+
+        compressed = 0
+        i = 2  # 跳过 system + 第一条 user
+        while i < len(msgs) - 1 and compressed < 3:
+            msg = msgs[i]
+            if msg.role == "assistant" and getattr(msg, "tool_calls", None):
+                j = i + 1
+                tool_summaries = []
+                while j < len(msgs) and msgs[j].role == "tool":
+                    tc = msgs[j].content or ""
+                    tool_summaries.append(tc[:150])
+                    j += 1
+                if tool_summaries:
+                    combined = " | ".join(tool_summaries)
+                    summary = Message(
+                        role="system",
+                        content=f"[工具结果摘要] {combined[:400]}"
+                    )
+                    msgs = msgs[:i] + [summary] + msgs[j:]
+                    compressed += 1
+                i += 1
+            else:
+                i += 1
+
+        if compressed > 0:
+            self._messages = deque(msgs)
 
     def _summarize_old_pairs(self):
         """智能压缩：把最旧的 user+assistant 对话对压缩为一条摘要消息

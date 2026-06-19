@@ -24,17 +24,20 @@ from agent.checkpoint import AgentCheckpoint
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "你是一个智能 AI Agent，能够使用工具完成用户任务。\n\n"
-    "核心工作流 — 修复验证闭环 (必须遵守):\n"
-    "1. 先用 read_file 读取目标文件内容，不要先用 list_dir 遍历目录\n"
-    "2. 分析代码，定位 bug 根因\n"
-    "3. 用 write_file 修复\n"
-    "4. 用 run_shell 运行验证: Python 用 'python xxx.py', JS 用 'node xxx.js'\n"
-    "5. 如果 run_shell 报错，仔细阅读错误信息，定位新问题后回到步骤 2\n"
-    "6. 验证通过后给出简洁中文总结，不再继续调用工具\n\n"
+    "你是一个智能 AI Agent，能够使用工具完成用户编程任务。\n\n"
+    "══════ 核心工作流（每次任务必须遵守）══════\n"
+    "1. 规划: 任务开始时不调用工具，先在脑中列出：要改哪些文件、顺序、怎么验证\n"
+    "2. 探索: 用 grep/glob 搜索相关代码，用 read_file 读取关键文件\n"
+    "3. 修复: 优先用 edit_file 做精准替换，只在创建新文件时用 write_file\n"
+    "4. 验证: 用 run_shell 运行验证（Python 用 'python xxx.py'，JS 用 'node xxx.js'）\n"
+    "5. 迭代: 如果验证失败，仔细阅读错误输出，找出根因后回到步骤 2，不要盲目重试\n"
+    "6. 完成: 验证通过后，输出简洁总结，停止调用工具\n"
+    "══════════════════════════════════════════\n\n"
     "行为准则:\n"
-    "- 每次只调用必要的工具，同一工具不要反复调用\n"
-    "- 收到工具结果后基于实际输出行动，不要猜测或重复相同调用\n"
+    "- 只要有可能就用 edit_file，不要用 write_file 重写整个文件\n"
+    "- 收到工具返回的 [ERROR] 后，必须阅读错误内容，分析原因后再行动\n"
+    "- 同一工具相同参数连续调用 3 次无进展，换个思路\n"
+    "- 不要猜测代码内容，先 read_file 确认再修改\n"
     "- 工具调用格式: {\"tool\": \"工具名\", \"arguments\": {...}}"
 )
 
@@ -193,16 +196,21 @@ class AgentLoop:
                     ))
                     if result.startswith("[ERROR]"):
                         self._step_trace.append(f"Step{step}: ERROR {tc.name}")
-                        self._error_count += 1
-                        if self._error_count >= self._max_errors:
-                            if self.enable_self_optimize:
-                                self._capture_failure(
-                                    user_input, step,
-                                    f"[STOPPED] 连续错误达到上限 ({self._max_errors})，已熔断。最后错误: {result}",
-                                    "circuit_breaker",
-                                )
-                            self._step_trace.append(f"Step{step}: CIRCUIT_BREAKER")
-                            return f"[STOPPED] 连续错误达到上限 ({self._max_errors})，已熔断。最后错误: {result}"
+                        is_tool_crash = (
+                            result.startswith("[ERROR] Unknown tool")
+                            or result.startswith("[ERROR] Tool '")
+                        )
+                        if is_tool_crash:
+                            self._error_count += 1
+                            if self._error_count >= self._max_errors:
+                                if self.enable_self_optimize:
+                                    self._capture_failure(
+                                        user_input, step,
+                                        f"[STOPPED] 连续工具执行错误达到上限 ({self._max_errors})，已熔断。最后错误: {result}",
+                                        "circuit_breaker",
+                                    )
+                                self._step_trace.append(f"Step{step}: CIRCUIT_BREAKER")
+                                return f"[STOPPED] 连续工具执行错误达到上限 ({self._max_errors})，已熔断。最后错误: {result}"
                 continue
 
             content = response.content or ""
@@ -242,7 +250,7 @@ class AgentLoop:
                 print(f"  [DEBUG detect] tool={tc.name} args={tc.arguments} fp={fp[:12]} count={self._tool_fingerprints.count(fp)}")
             if len(self._tool_fingerprints) > 20:
                 self._tool_fingerprints = self._tool_fingerprints[-20:]
-            if self._tool_fingerprints.count(fp) >= 2:
+            if self._tool_fingerprints.count(fp) >= 3:
                 return True
         return False
 

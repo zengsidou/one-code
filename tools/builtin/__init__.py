@@ -5,18 +5,107 @@ from tools.registry import run_shell
 
 
 def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
-    @registry.register("read_file", "读取指定路径的文件内容")
-    def read_file(path: str) -> str:
+    @registry.register("read_file", "读取文件内容，支持 offset(起始行，1开始)和 limit(行数上限)")
+    def read_file(path: str, offset: int = 0, limit: int = 2000) -> str:
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
-                content = f.read()
-            return content[:5000] if len(content) > 5000 else content
+                lines = f.readlines()
+            total = len(lines)
+            if offset > 0:
+                lines = lines[offset - 1:]
+            if limit > 0:
+                lines = lines[:limit]
+            content = "".join(lines)
+            if total > offset + len(lines):
+                content += f"\n... (共 {total} 行，已显示第 {max(offset,1)}-{min(offset+len(lines)-1,total)} 行)"
+            return content[:8000] if len(content) > 8000 else content
         except FileNotFoundError:
             return f"[ERROR] File not found: {path}"
         except PermissionError:
             return f"[ERROR] Permission denied: {path}"
         except Exception as e:
             return f"[ERROR] Read file failed: {e}"
+
+    @registry.register("grep", "在目录中搜索匹配正则表达式的内容，返回文件路径和行号。支持 include 参数过滤文件名(如 '*.py')")
+    def grep(pattern: str, path: str = ".", include: str = "*") -> str:
+        import re
+        import fnmatch
+        from pathlib import Path
+
+        try:
+            compiled = re.compile(pattern)
+        except re.error as e:
+            return f"[ERROR] 正则表达式错误: {e}"
+
+        results = []
+        try:
+            base = Path(path).resolve()
+            for f in base.rglob("*"):
+                if not f.is_file():
+                    continue
+                if include != "*" and not fnmatch.fnmatch(f.name, include):
+                    continue
+                if f.suffix.lower() in (".exe", ".dll", ".pyd", ".pyc", ".so", ".o", ".obj", ".bin", ".png", ".jpg", ".zip", ".tar", ".gz"):
+                    continue
+                try:
+                    if f.stat().st_size > 1024 * 1024:
+                        continue
+                    with open(f, encoding="utf-8", errors="replace") as fh:
+                        for i, line in enumerate(fh, 1):
+                            if compiled.search(line):
+                                results.append(f"{f.relative_to(base)}:{i}: {line.rstrip()[:200]}")
+                                if len(results) >= 100:
+                                    break
+                except Exception:
+                    continue
+                if len(results) >= 100:
+                    break
+        except Exception as e:
+            return f"[ERROR] 搜索失败: {e}"
+
+        if not results:
+            return f"未找到匹配 '{pattern}' 的内容 (路径: {path}, 文件过滤: {include})"
+        suffix = f"\n... (超过 100 条结果，已截断)" if len(results) >= 100 else ""
+        return f"找到 {len(results)} 处匹配:\n" + "\n".join(results) + suffix
+
+    @registry.register("glob", "按 glob 模式匹配文件，如 '**/*.py' 或 '*.json'")
+    def glob_files(pattern: str, path: str = ".") -> str:
+        from pathlib import Path
+        try:
+            matches = sorted(Path(path).rglob(pattern))
+            if not matches:
+                return f"未找到匹配 '{pattern}' 的文件 (路径: {path})"
+            items = []
+            for m in matches[:100]:
+                items.append(str(m))
+            suffix = f"\n... (共 {len(matches)} 个结果，已截断至前 100 个)" if len(matches) > 100 else ""
+            return f"找到 {len(matches)} 个匹配:\n" + "\n".join(items) + suffix
+        except Exception as e:
+            return f"[ERROR] glob 失败: {e}"
+
+    @registry.register("edit_file", "精确替换文件中的指定字符串。old_string 必须唯一出现，否则替换失败")
+    def edit_file(path: str, old_string: str, new_string: str) -> str:
+        try:
+            with open(path, encoding="utf-8") as f:
+                content = f.read()
+        except FileNotFoundError:
+            return f"[ERROR] 文件不存在: {path}"
+        except Exception as e:
+            return f"[ERROR] 读取文件失败: {e}"
+
+        count = content.count(old_string)
+        if count == 0:
+            return f"[ERROR] 未找到要替换的文本 (在 {path} 中)。请确认 old_string 与文件内容精确匹配（包括缩进、换行）"
+        if count > 1:
+            return f"[ERROR] 找到 {count} 处匹配，请提供更多上下文以唯一确定要替换的位置"
+
+        try:
+            new_content = content.replace(old_string, new_string, 1)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            return f"已替换 {path} 中的 1 处匹配 ({len(content)} → {len(new_content)} 字符)"
+        except Exception as e:
+            return f"[ERROR] 写入文件失败: {e}"
 
     @registry.register("write_file", "写入内容到指定路径的文件")
     def write_file(path: str, content: str) -> str:

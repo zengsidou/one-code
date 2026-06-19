@@ -478,7 +478,7 @@ def test_integration_self_optimize():
 
     @registry.register("failing_tool", "Always fails")
     def failing_tool(x: str = "test") -> str:
-        return f"[ERROR] intentional failure"
+        raise RuntimeError(f"intentional crash #{x}")
 
     # 每次调用使用不同参数，绕过循环检测，使熔断机制触发
     class CircuitBreakerMockLLM(BaseLLM):
