@@ -178,7 +178,7 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
                 "https://cn.bing.com/search",
                 params={"q": query, "setlang": "zh-cn"},
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-                follow_redirects=True, timeout=10,
+                follow_redirects=True, timeout=5,
             )
             if r.status_code == 200:
                 # 提取搜索结果
