@@ -375,7 +375,7 @@ class ArchitectureApplier:
         return backup_path
 
     def apply(self, proposal: dict) -> bool:
-        """应用架构改动"""
+        """应用架构改动（带语法安全门）"""
         file_path = proposal.get("full_path", "")
         old_code = proposal.get("old_code_hint", "")
         new_code = proposal.get("new_code", "")
@@ -389,19 +389,21 @@ class ArchitectureApplier:
                 content = f.read()
 
             if old_code and old_code in content:
-                content = content.replace(old_code, new_code, 1)
+                new_content = content.replace(old_code, new_code, 1)
             else:
-                # Try smart insertion: find target function/class and insert new code
                 target = proposal.get("target_location", "")
                 if target and target in content:
-                    # Insert after the target line
                     idx = content.index(target) + len(target)
-                    content = content[:idx] + "\n" + new_code + content[idx:]
+                    new_content = content[:idx] + "\n" + new_code + content[idx:]
                 else:
-                    content = content.rstrip() + "\n\n" + new_code + "\n"
+                    new_content = content.rstrip() + "\n\n" + new_code + "\n"
+
+            # ━━━ 安全门：语法检查 ━━━
+            if not self._validate_syntax(file_path, new_content):
+                return False
 
             with open(file_path, "w", encoding="utf-8") as f:
-                f.write(content)
+                f.write(new_content)
 
             self.applied.append({
                 "file_path": file_path,
@@ -411,6 +413,34 @@ class ArchitectureApplier:
             })
             return True
         except Exception:
+            return False
+
+    @staticmethod
+    def _validate_syntax(file_path: str, content: str) -> bool:
+        """语法安全门：Python 文件用 py_compile 检查，JSON 文件用 json.loads 检查"""
+        ext = os.path.splitext(file_path)[1].lower()
+        try:
+            if ext == ".py":
+                import py_compile
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tmp:
+                    tmp.write(content)
+                    tmp_path = tmp.name
+                try:
+                    py_compile.compile(tmp_path, doraise=True)
+                    return True
+                except py_compile.PyCompileError as e:
+                    print(f"  [L4-GATE] 语法检查失败，拒绝应用: {e}")
+                    return False
+                finally:
+                    os.unlink(tmp_path)
+            elif ext == ".json":
+                json.loads(content)
+                return True
+            else:
+                return True
+        except Exception as e:
+            print(f"  [L4-GATE] 验证失败: {e}")
             return False
 
     def apply_and_reload(self, proposal: dict, agent_instance) -> bool:

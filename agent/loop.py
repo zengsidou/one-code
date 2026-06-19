@@ -612,6 +612,14 @@ class AgentLoop:
             count=3,
         )
 
+        # 为每个挑战生成 buggy fixture 文件
+        for ch in challenges:
+            fixture = self._challenge_gen.create_fixture(
+                ch.get("task", ""), ch.get("difficulty", 2)
+            )
+            if fixture:
+                ch["fixture"] = fixture
+
         return {
             "growth_summary": self._ability_profile.get_growth_summary(),
             "weak_areas": weak,
@@ -767,16 +775,31 @@ class AgentLoop:
 
         for fpath in list(modified_files)[:5]:
             ext = os.path.splitext(fpath)[1].lower()
-            if ext not in (".py", ".js"):
-                continue
             try:
                 if ext == ".py":
                     result = run_shell(f"python \"{fpath}\"", timeout=10)
-                else:
+                    if "[ERROR]" in result or "Traceback" in result or "SyntaxError" in result or "Error: " in result:
+                        return {"passed": False, "reason": f"运行 {fpath} 失败: {result[:200]}"}
+                elif ext == ".js":
                     result = run_shell(f"node \"{fpath}\"", timeout=10)
-                if "[ERROR]" in result or "Traceback" in result or "Error: " in result or "SyntaxError" in result:
-                    return {"passed": False, "reason": f"运行 {fpath} 失败: {result[:200]}"}
+                    if "[ERROR]" in result or "Error: " in result or "SyntaxError" in result:
+                        return {"passed": False, "reason": f"运行 {fpath} 失败: {result[:200]}"}
+                elif ext == ".json":
+                    with open(fpath, encoding="utf-8") as f:
+                        json.loads(f.read())
+                elif ext in (".html", ".htm"):
+                    with open(fpath, encoding="utf-8", errors="replace") as f:
+                        html = f.read()
+                        if not any(tag in html.lower() for tag in ("<!doctype", "<html", "<head", "<body")):
+                            return {"passed": False, "reason": f"{fpath} 不像是有效的 HTML 文件"}
+                elif ext in (".yaml", ".yml"):
+                    import yaml
+                    with open(fpath, encoding="utf-8") as f:
+                        yaml.safe_load(f.read())
+            except json.JSONDecodeError as e:
+                return {"passed": False, "reason": f"{fpath} JSON 语法错误: {e}"}
             except Exception as e:
-                return {"passed": False, "reason": f"验证 {fpath} 异常: {e}"}
+                if ext in (".yaml", ".yml"):
+                    return {"passed": False, "reason": f"{fpath} YAML 语法错误: {e}"}
 
         return {"passed": True}

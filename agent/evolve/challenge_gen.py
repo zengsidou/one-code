@@ -39,38 +39,16 @@ CHALLENGE_PROMPT = """你是一个代码工程 mentor。你的学生是一个 AI
 
 
 class ChallengeGenerator:
-    """Agent 成长挑战生成器
-
-    根据当前能力画像，生成难度递增的代码任务，
-    推动 Agent 突破能力边界。
-    """
-
     def __init__(self, llm_adapter):
         self.llm = llm_adapter
 
     def generate(
-        self,
-        profile_summary: str,
-        weak_areas: list[str],
-        current_level: int = 2,
-        count: int = 3,
+        self, profile_summary: str, weak_areas: list[str],
+        current_level: int = 2, count: int = 3,
     ) -> list[dict]:
-        """生成递增难度的代码任务
-
-        Args:
-            profile_summary: 能力画像摘要
-            weak_areas: 弱项领域列表
-            current_level: 当前能稳定完成的最高难度
-            count: 生成任务数量
-
-        Returns:
-            任务列表 [{task, category, difficulty, ...}]
-        """
-        # 难度范围：只生成当前级别 ±1 的任务，避免发必败题
         level_min = max(1, current_level)
         level_max = min(5, current_level + 1)
         difficulty_range = f"{level_min} 到 {level_max}"
-
         weak_text = ", ".join(weak_areas) if weak_areas else "无明显弱项，全面发展"
 
         prompt = (CHALLENGE_PROMPT
@@ -86,9 +64,59 @@ class ChallengeGenerator:
                  Message(role="user", content=prompt)],
                 tools=None,
             )
-            return self._parse_tasks(resp.content or "")
+            tasks = self._parse_tasks(resp.content or "")
         except Exception:
             return []
+
+        return tasks
+
+    def create_fixture(self, task: str, difficulty: int) -> str | None:
+        """为挑战任务生成对应的 buggy fixture 文件，写到当前目录"""
+        import os, re
+
+        prompt = f"""生成一个简短的、有真实 bug 的 Python 脚本，作为代码修复练习的素材。
+
+任务: {task}
+难度: {difficulty}/5
+
+要求:
+- 脚本不超过 15 行
+- 包含 1-2 个真实 bug（如 NameError、SyntaxError、逻辑错误）
+- 脚本应有明确的计算或处理目标
+- 只输出 Python 代码，不要解释"""
+
+        try:
+            resp = self.llm.generate(
+                [Message(role="system", content="你生成有 bug 的 Python 代码练习。只输出代码。"),
+                 Message(role="user", content=prompt)],
+                tools=None,
+            )
+            code = resp.content or ""
+        except Exception:
+            return None
+
+        # Extract code from response
+        code = code.strip()
+        if code.startswith("```"):
+            lines = code.split("\n")
+            code = "\n".join(lines[1:]) if len(lines) > 1 else code[3:]
+        if code.endswith("```"):
+            code = code[:-3]
+        code = code.strip()
+
+        if not code or "def " not in code:
+            return None
+
+        # Generate unique filename
+        import hashlib
+        fname = f"challenge_{hashlib.md5(task.encode()).hexdigest()[:8]}.py"
+        fpath = os.path.join(os.getcwd(), fname)
+        try:
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write(code)
+            return fpath
+        except Exception:
+            return None
 
     @staticmethod
     def _parse_tasks(text: str) -> list[dict]:
