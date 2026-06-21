@@ -595,13 +595,6 @@ class AgentLoop:
                 report["details"].append(detail)
                 continue
 
-            # 跳过需人工介入的类型
-            if root_cause.get("suggested_fix_type") in ("fix_tool_code", "switch_model"):
-                detail["action"] = "skipped_requires_manual"
-                detail["message"] = "需人工介入"
-                report["details"].append(detail)
-                continue
-
             # 2. 生成修复
             fix = self._self_repair.generate_fix(root_cause, current_config)
             detail["fix_type"] = fix.get("fix_type", "?")

@@ -219,17 +219,6 @@ class ArchitectureBottleneckDetector:
                 "capability_gap": gap_text,
                 "confidence": 0.90,
             }
-        gap_text = capability_gap or "Agent 无法完成需要多文件协调、复杂依赖或长上下文的任务"
-
-        # 快速判定：如果出现 Unknown tool 错误 → 直接判定为 tool_too_simple
-        if unknown_tool_count >= 1:
-            return {
-                "bottleneck_type": "tool_too_simple",
-                "target_file": "tools/builtin/__init__.py",
-                "rationale": f"Agent 多次尝试调用不存在的工具({unknown_tool_count}次)，当前工具集不足",
-                "capability_gap": gap_text,
-                "confidence": 0.95,
-            }
 
         arch_text = (
             "agent/loop.py: ReAct 循环 + 熔断 + 回路检测\n"
@@ -519,6 +508,39 @@ class ArchitectureApplier:
             print(f"  [L4-GATE] 验证失败: {e}")
             return False
 
+    @staticmethod
+    def _recreate_instance(new_class: type, old_instance) -> object | None:
+        """用新加载的类重建实例，保留旧实例的状态。
+
+        不使用硬编码构造参数；而是遍历旧实例的公有属性，
+        尝试以对应参数调用新类的 __init__，如果失败则退回到浅拷贝 __dict__。
+        """
+        import inspect
+        try:
+            sig = inspect.signature(new_class.__init__)
+            params = sig.parameters
+            kwargs = {}
+            for name in params:
+                if name == "self":
+                    continue
+                if hasattr(old_instance, name):
+                    kwargs[name] = getattr(old_instance, name)
+                elif params[name].default is not inspect.Parameter.empty:
+                    kwargs[name] = params[name].default
+            return new_class(**kwargs)
+        except Exception:
+            pass
+
+        try:
+            inst = new_class.__new__(new_class)
+            inst.__dict__.update({
+                k: v for k, v in old_instance.__dict__.items()
+                if not k.startswith("_")
+            })
+            return inst
+        except Exception:
+            return None
+
     def apply_and_reload(self, proposal: dict, agent_instance, run_tests: bool = False) -> dict:
         """应用架构改动并动态重载受影响的模块
 
@@ -557,11 +579,9 @@ class ArchitectureApplier:
                 parent = getattr(agent_instance, parent_attr, None)
                 if parent and hasattr(parent, child_attr):
                     old = getattr(parent, child_attr)
-                    try:
-                        new_instance = type(old)(max_tokens=old.max_tokens)
+                    new_instance = self._recreate_instance(type(old), old)
+                    if new_instance is not None:
                         setattr(parent, child_attr, new_instance)
-                    except Exception:
-                        pass
             elif parent_attr == "registry" and child_attr is None:
                 try:
                     from tools.builtin import register_builtin_tools
@@ -648,37 +668,102 @@ class ArchitectureValidator:
     """架构改动验证器
 
     用一组基准任务验证架构改动是否有效。
+    验证标准：功能等价性 — 改动前后的输出结构一致、关键行为保持。
     """
+
+    # 用于判断输出是否实质为空/退化的哨兵模式
+    _DEGRADED_PATTERNS = [
+        r"^[重复\s]*$",
+        r"^error[:\s]",
+        r"^traceback",
+        r"^exception",
+        r"^\s*$",
+    ]
 
     def __init__(self):
         self.benchmarks: list[str] = []
+        self._baseline: dict[str, str] = {}
 
     def add_benchmark(self, task: str):
         """添加基准任务"""
         self.benchmarks.append(task)
 
+    def capture_baseline(self, agent_instance) -> None:
+        """记录改动前的基准输出"""
+        self._baseline = {}
+        for task in self.benchmarks:
+            try:
+                result = agent_instance.run(task)
+                self._baseline[task] = result
+            except Exception:
+                self._baseline[task] = ""
+
     def validate(self, agent_instance) -> dict:
         """运行基准任务验证改动效果
 
         Returns:
-            { total, success_count, success_rate, improved (bool) }
+            { total, success_count, success_rate, improved (bool),
+              failures: [{task, reason}] }
         """
         if not self.benchmarks:
             return {"total": 0, "success_count": 0, "success_rate": 0, "improved": False}
 
-        success = 0
+        failures = []
         for task in self.benchmarks:
             try:
                 result = agent_instance.run(task)
-                if "[STOPPED]" not in result and "[LLM error]" not in result:
-                    success += 1
-            except Exception:
-                pass
+                reason = self._check_degraded(task, result)
+                if reason:
+                    failures.append({"task": task, "reason": reason})
+            except Exception as e:
+                failures.append({"task": task, "reason": f"Exception: {e}"})
 
+        success = len(self.benchmarks) - len(failures)
         rate = success / len(self.benchmarks)
         return {
             "total": len(self.benchmarks),
             "success_count": success,
             "success_rate": round(rate, 2),
             "improved": rate >= 0.5,
+            "failures": failures,
         }
+
+    def _check_degraded(self, task: str, result: str) -> str | None:
+        """检查输出是否退化。返回 None 表示通过，返回字符串表示失败原因。"""
+        # 1. 无输出
+        if not result or not result.strip():
+            return "空输出"
+
+        # 2. 硬崩溃信号
+        if "[STOPPED]" in result:
+            return "触发熔断 [STOPPED]"
+        if "[LLM error]" in result:
+            return "LLM 调用错误"
+
+        # 3. 退化模式检查
+        import re
+        for pattern in self._DEGRADED_PATTERNS:
+            if re.search(pattern, result, re.IGNORECASE):
+                return f"输出匹配退化模式: {pattern}"
+
+        # 4. 与基线对比（如有）
+        if task in self._baseline and self._baseline[task]:
+            baseline = self._baseline[task]
+            # 长度大幅退化 (减少 80% 以上)
+            if len(result) < len(baseline) * 0.2:
+                return f"输出严重退化 (基线 {len(baseline)} → {len(result)} 字符)"
+            # 基线有实质内容但新结果无实质信号
+            if self._has_substance(baseline) and not self._has_substance(result):
+                return "输出失去实质内容"
+
+        return None
+
+    @staticmethod
+    def _has_substance(text: str) -> bool:
+        """判断文本是否有实质内容（非纯状态/错误消息）"""
+        stripped = text.strip()
+        if len(stripped) < 20:
+            return False
+        if stripped.startswith("[STOPPED]") or stripped.startswith("[LLM error]"):
+            return False
+        return True

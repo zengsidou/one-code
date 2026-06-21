@@ -297,7 +297,7 @@ def test_generate_fix():
     assert fix4["fix_type"] == "add_reasoning_hint"
     assert "system_prompt" in fix4["fixed"]
 
-    # fix_tool_code
+    # fix_tool_code — 尝试生成代码修复，LLM 失败时回退到 requires_manual
     rc_fix = {
         "root_cause_type": "tool_error",
         "confidence": 0.9,
@@ -306,9 +306,14 @@ def test_generate_fix():
         "fix_description": "修代码",
     }
     fix5 = repair.generate_fix(rc_fix, config)
-    assert fix5["fixed"].get("requires_manual") is True
+    # MockLLM 无法生成有效 JSON，回退到 requires_manual
+    if fix5["fixed"].get("requires_manual") is True:
+        pass
+    else:
+        assert "target_file" in fix5["fixed"]
+        assert "new_code" in fix5["fixed"]
 
-    # switch_model
+    # switch_model — 实际切换模型
     rc_model = {
         "root_cause_type": "model_limitation",
         "confidence": 0.8,
@@ -317,7 +322,8 @@ def test_generate_fix():
         "fix_description": "换模型",
     }
     fix6 = repair.generate_fix(rc_model, config)
-    assert fix6["fixed"].get("requires_manual") is True
+    assert fix6["fixed"].get("model_name") is not None
+    assert fix6["fixed"]["model_name"] != config.get("model_name", "")
 
     print("  [PASS] test_generate_fix")
 
