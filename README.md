@@ -2,131 +2,96 @@
 
 从零实现的 Agent 框架，具备**自我进化能力**——能从失败中学习、自动修复缺陷、甚至修改自己的源代码。
 
+对标岗位：AI 研发效能工程师 (AIDP)，覆盖 AI Coding / AI Agent / Harness Engineering 三大方向。
+
 ## 架构
 
 ```
 micro-agent/
 ├── agent/                    # Agent 核心
-│   ├── models.py             # 数据模型 (Message, ToolCall, AgentState)
-│   ├── loop.py               # Agent Loop (ReAct + 熔断 + 回路检测 + 自优化)
+│   ├── loop.py               # Agent Loop (ReAct/Plan-then-Execute + 熔断 + 回路检测)
+│   ├── models.py             # 数据模型
 │   ├── orchestrator.py       # 多 Agent 编排 (fan-out / pipeline)
-│   ├── subagent.py           # 轻量子 Agent 委派
-│   ├── diagnosis.py          # 失败诊断模块
-│   ├── root_cause.py         # LLM 根因分析
-│   ├── self_repair.py        # 修复策略引擎
-│   ├── verify.py             # 修复效果验证
+│   ├── subagent.py           # 子 Agent 委派
+│   ├── specialists.py        # 专业化 Agent (Coder/Reviewer/Tester/Doc)
+│   ├── diagnosis.py / root_cause.py / self_repair.py / verify.py  # 自修复链
 │   ├── fix_history.py        # 跨会话修复复用
 │   ├── meta_optimize.py      # 自优化组件的自优化
-│   └── evolve/               # 进化引擎
-│       ├── post_mortem.py    # 每次执行后 LLM 深度复盘
-│       ├── skill_library.py  # 可复用技能库 (强化+衰减)
-│       ├── ability_profile.py# 能力画像 + 成长曲线
-│       ├── challenge_gen.py  # 主动挑战生成器
-│       └── architect.py      # 架构自进化 (读自己代码+改代码)
-├── llm/                      # LLM 适配层
-│   ├── base.py               # 抽象基类
-│   ├── ollama.py             # Ollama 实现
-│   ├── deepseek_api.py       # DeepSeek API 适配器
-├── tools/                    # 工具系统
-│   ├── schema.py             # 自动 Schema 生成
-│   ├── registry.py           # 装饰器注册 + 危险命令拦截
-│   ├── builtin/              # 内置工具 (可被 Agent 自行扩展)
-├── memory/                   # 记忆系统
-│   ├── token_counter.py      # Token 精确计数 (tiktoken + fallback)
-│   ├── short_term.py         # 64K 上下文窗口 + 智能摘要压缩
-│   ├── long_term.py          # ChromaDB 向量检索
-├── mcp/                      # MCP 协议集成
-│   ├── protocol.py           # JSON-RPC 2.0 + MCP 消息类型
-│   ├── transport.py          # stdio 传输层
-│   ├── server.py / client.py # MCP stdio
-│   ├── sse_server.py         # MCP SSE server
-│   ├── sse_client.py         # MCP SSE client
-├── sandbox/                  # 安全沙箱
-│   ├── policy.py             # 安全策略
-│   ├── fs_jail.py            # 文件系统隔离
-│   ├── executor.py           # 子进程安全执行
-├── tests/                    # 33 项测试
-│   ├── test_loop.py          # 核心测试
-│   ├── test_self_optimize.py # 自优化全链路测试
-│   ├── test_mcp.py / test_mcp_e2e.py / test_mcp_sse.py
-│   ├── test_sandbox.py / test_subagent.py
-├── main.py                   # 交互式 CLI
-├── main_mcp.py               # MCP stdio server
-├── main_mcp_sse.py           # MCP SSE server
+│   ├── rules.py              # AGENTS.md 自动积累 (Hashimoto 模式)
+│   ├── observability.py      # 指标/追踪/报告
+│   ├── governance.py         # 权限控制 + 审计日志
+│   ├── evaluator.py          # 独立评估 Agent (5 维度评分)
+│   ├── token_optimizer.py    # Token 用量优化
+│   └── evolve/               # 进化引擎 (L0-L4)
+│       ├── post_mortem.py / skill_library.py / ability_profile.py
+│       ├── challenge_gen.py / architect.py
+├── eval/                     # SWE-bench Lite 评测
+│   └── swebench_runner.py    # 自动化评测框架 (Agentless 3 阶段策略)
+├── ci/                       # CI/CD
+│   ├── pipeline.py           # 自动化流水线 (测试/SWE-bench/语法检查)
+│   └── dashboard.html        # 可观测性 Dashboard
+├── llm/ memory/ tools/ mcp/ sandbox/  # 基础设施
+├── tests/                    # 52 项单元测试
+├── main.py / ide_server.py  # CLI + Web IDE
 ```
+
+## Harness Engineering 六层架构
+
+| 层 | 名称 | 实现 |
+|----|------|------|
+| L1 | 信息边界层 | AGENTS.md 规则注入 + 角色专用系统提示 |
+| L2 | 工具系统层 | 装饰器注册 + 自动 Schema + 权限过滤 |
+| L3 | 执行编排层 | Plan-then-Execute / ReAct / Pipeline / Fan-out |
+| L4 | 记忆状态层 | 短期(64K)+长期(ChromaDB) + Context Reset |
+| L5 | 评估观测层 | 独立评估器 + 指标/追踪/仪表盘 |
+| L6 | 约束恢复层 | 权限控制 + 审计 + 熔断 + 回路检测 |
 
 ## 核心能力
 
-### 五层自我改进链
+### SWE-bench 评测 (AI Coding)
 
-| 层 | 能力 | 触发条件 |
-|------|------|----------|
-| **FixHistory** | 复用已验证的修复经验 | 跨会话匹配相似失败 |
-| **SelfRepair** | 自动调整 prompt/参数/阈值 | 熔断/回路检测触发 |
-| **MetaOptimizer** | 优化自优化组件自身 | 连续多轮无有效修复 |
-| **ArchitectureEvolution** | 读自己源码 + 生成改动方案 | 架构瓶颈检测 |
-| **ToolEvolution** | 识别缺工具 → 写代码 → 自动注册 | Unknown tool 重复出现 |
+- 300 实例 SWE-bench Lite 自动化评测
+- Agentless 3 阶段策略（定位→修复→验证）
+- 失败自动重试 + Plan-then-Execute 模式切换
+- Gitee 镜像仓库支持
 
 ### 自进化引擎
 
-| 模块 | 功能 |
+| 层 | 能力 |
 |------|------|
-| **PostMortem** | 每次执行后 LLM 深度复盘：难度/效率评分、策略提取、新技能识别 |
-| **SkillLibrary** | 可复用技能库：查询/强化/衰减，自动注入 system prompt |
-| **AbilityProfile** | 能力画像：自动任务分类，追踪成功率/效率/难度趋势 |
-| **ChallengeGenerator** | 主动成长：根据弱项生成递增难度挑战任务 |
+| L0 FixHistory | 跨会话复用已验证修复 |
+| L1 SelfRepair | 自动调参/prompt/工具代码/模型切换 |
+| L2 MetaOptimizer | 优化自优化组件自身 |
+| L3 Evolution | 复盘→技能库→画像→挑战生成 |
+| L4 Architecture | 读源码+生成改动+自测试+保留/回滚 |
 
-### 模块对标
+### 企业级能力
 
-| 模块 | 能力 |
-|------|------|
-| Agent Loop | ReAct 循环、回路检测 (tool+args MD5)、熔断器、自优化闭环 |
-| Context | 64K 窗口、tiktoken 精确计数、智能摘要压缩、tool 链保护 |
-| Tool Use | 装饰器注册、自动 Schema 生成、Agent 自行扩展工具 |
-| LLM Adapter | DeepSeek API 原生 Function Calling、Ollama 本地调用 |
-| Memory | 短期智能压缩窗口 + 长期 ChromaDB 向量检索 |
-| MCP | stdio/SSE 双传输、工具暴露为标准化接口 |
-| SubAgent | 轻量子 Agent 委派、多 Agent 扇出/流水线编排 |
+- **权限控制**: 工具级 allow/deny + 风险分级 + 配额 + 工作区隔离
+- **审计日志**: JSONL 格式，包含 agent/tool/risk/details/time
+- **可观测性**: 指标/token追踪/工具耗时/控制台报告
+- **Token 优化**: prompt 缓存/输出压缩/compact/flash 模型降级
 
 ## 快速开始
 
 ```bash
-# 设置 DeepSeek API Key
+# 依赖
+pip install chromadb httpx datasets unidiff GitPython
+
+# 交互式 CLI
 $env:DEEPSEEK_API_KEY = "your-key"
-
-# 安装依赖
-pip install chromadb httpx
-
-# 交互式 Agent
 python main.py
 
-# 开启自进化 (代码中)
-agent = AgentLoop(
-    registry=registry, memory=memory,
-    enable_self_optimize=True,  # 五层修复链
-    enable_evolution=True,      # 复盘+技能+画像+挑战
-)
-```
+# SWE-bench 评测
+python -m eval.swebench_runner --max 5 --repo "django/django"
 
-## MCP 模式
+# CI 流水线
+python -m ci.pipeline
 
-```bash
-python main_mcp.py         # MCP stdio server
-python main_mcp_sse.py     # MCP SSE server (HTTP)
-```
-
-## 运行测试
-
-```bash
-python tests/test_loop.py           # 7 项核心测试
-python tests/test_self_optimize.py  # 26 项自优化全链路测试
-python tests/test_mcp.py
-python tests/test_mcp_e2e.py
-python tests/test_mcp_sse.py
-python tests/test_sandbox.py
-python tests/test_subagent.py
+# 开启 Plan-then-Execute
+agent = AgentLoop(plan_first=True, ...)
 ```
 
 ## 设计思路
 
-Micro-Agent 框架从零实现了一个具备自我进化能力的 Agent 系统。除了 ReAct 循环、工具系统和 MCP 协议等基础能力外，它引入五层自我改进链——复用已验证修复、自动调参、诊断架构瓶颈并修改源代码。Agent 在 64K 上下文窗口下独立完成多文件代码工程任务，每次执行后通过复盘提取可复用技能、追踪能力成长曲线、生成递增难度挑战。
+Micro-Agent 框架从零实现了一个具备自我进化能力的 Agent 系统。对标 Harness Engineering 六层架构，覆盖 AI Coding 评测（SWE-bench）、多 Agent 专业化分工、企业级权限审计、可观测性仪表盘。Agent 能从失败中自动积累 AGENTS.md 规则，通过独立评估器验证生成质量，支持 Plan-then-Execute 安全执行模式。

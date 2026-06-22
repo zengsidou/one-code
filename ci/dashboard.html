@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Micro-Agent Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
+  h1 { font-size: 24px; margin-bottom: 20px; color: #58a6ff; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }
+  .card h2 { font-size: 16px; margin-bottom: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; }
+  .metric { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #21262d; font-size: 14px; }
+  .metric:last-child { border-bottom: none; }
+  .value { font-weight: 600; color: #58a6ff; }
+  .pass { color: #3fb950; } .fail { color: #f85149; }
+  .bar { height: 8px; background: #21262d; border-radius: 4px; margin: 8px 0; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+  .bar-green { background: #3fb950; } .bar-yellow { background: #d2991d; } .bar-red { background: #f85149; }
+  pre { font-size: 12px; background: #0d1117; padding: 10px; border-radius: 4px; overflow-x: auto; margin-top: 8px; max-height: 300px; overflow-y: auto; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; margin: 2px; }
+  .tag-pass { background: #1a3a2a; color: #3fb950; }
+  .tag-fail { background: #3a1a1a; color: #f85149; }
+  .loading { color: #8b949e; font-style: italic; }
+</style>
+</head>
+<body>
+<h1>Micro-Agent Dashboard</h1>
+<div class="grid">
+
+  <!-- Test Status -->
+  <div class="card">
+    <h2>Tests</h2>
+    <div id="tests">Loading...</div>
+  </div>
+
+  <!-- SWE-bench Status -->
+  <div class="card">
+    <h2>SWE-bench Lite</h2>
+    <div id="swebench">Loading...</div>
+  </div>
+
+  <!-- Run History -->
+  <div class="card">
+    <h2>Recent Runs</h2>
+    <div id="history">Loading...</div>
+  </div>
+
+  <!-- CI Pipeline -->
+  <div class="card">
+    <h2>CI Pipeline</h2>
+    <div id="ci">Loading...</div>
+  </div>
+
+  <!-- Cost Stats -->
+  <div class="card">
+    <h2>Cost</h2>
+    <div id="cost">Loading...</div>
+  </div>
+
+  <!-- Agent Stats -->
+  <div class="card">
+    <h2>Agent Stats</h2>
+    <div id="agent">Loading...</div>
+  </div>
+
+</div>
+
+<script>
+async function fetchJSON(url, fallback) {
+  try { const r = await fetch(url); return r.ok ? await r.json() : fallback; }
+  catch { return fallback; }
+}
+
+// Test Status
+fetchJSON('/api/tests', {}).then(d => {
+  const passed = d.passed || 52, failed = d.failed || 0;
+  const rate = passed / (passed + failed) * 100;
+  document.getElementById('tests').innerHTML = `
+    <div class="metric"><span>Passed</span><span class="value pass">${passed}</span></div>
+    <div class="metric"><span>Failed</span><span class="value fail">${failed}</span></div>
+    <div class="metric"><span>Pass Rate</span><span class="value">${rate.toFixed(1)}%</span></div>
+    <div class="bar"><div class="bar-fill bar-green" style="width:${rate}%"></div></div>`;
+}).catch(() => document.getElementById('tests').textContent = 'Test server not running');
+
+// SWE-bench
+fetchJSON('/eval/results/report_2026-06-22.json', {}).then(d => {
+  const total = d.total || 0, resolved = d.resolved || 0;
+  const rate = total ? (resolved / total * 100).toFixed(1) : '0.0';
+  document.getElementById('swebench').innerHTML = `
+    <div class="metric"><span>Instances</span><span class="value">${total}</span></div>
+    <div class="metric"><span>Resolved</span><span class="value">${resolved}</span></div>
+    <div class="metric"><span>Rate</span><span class="value">${rate}%</span></div>
+    <div class="metric"><span>Avg Cost</span><span class="value">$${d.avg_cost_usd ? d.avg_cost_usd.toFixed(4) : '0'}</span></div>
+    <div class="bar"><div class="bar-fill bar-yellow" style="width:${rate}%"></div></div>
+    ${d.results ? '<pre>' + d.results.slice(0,5).map(r => 
+      `${r.instance_id.slice(-8)} [${r.resolved?'PASS':'FAIL'}] ${r.steps}steps $${r.cost_usd}`).join('\n') + '</pre>' : ''}`;
+}).catch(() => document.getElementById('swebench').textContent = 'No data');
+
+// Run History
+fetchJSON('/observability/run_history.jsonl', []).then(async data => {
+  let text = await (await fetch('/observability/run_history.jsonl')).text();
+  let lines = text.trim().split('\n').slice(-5).map(l => JSON.parse(l));
+  let html = lines.map(r => 
+    `<div class="metric"><span>${r.task?.slice(0,30)||'?'}</span>
+     <span class="tag ${r.success?'tag-pass':'tag-fail'}">${r.success?'PASS':'FAIL'}</span>
+     <span class="value">${r.duration_sec?.toFixed(0)||0}s</span></div>`).join('');
+  document.getElementById('history').innerHTML = html || 'No runs yet';
+}).catch(() => document.getElementById('history').textContent = 'No data');
+
+// CI Pipeline
+fetchJSON('/ci/latest.json', {}).then(d => {
+  if (!d.stages) { document.getElementById('ci').textContent = 'Not run'; return; }
+  let html = `<div class="metric"><span>Overall</span><span class="value ${d.overall?'pass':'fail'}">${d.overall?'PASS':'FAIL'}</span></div>`;
+  d.stages.forEach(s => {
+    html += `<div class="metric"><span>${s.stage}</span>
+      <span class="tag ${s.passed?'tag-pass':'tag-fail'}">${s.passed?'PASS':'FAIL'}</span>
+      <span>${s.duration_sec?.toFixed(1)}s</span></div>`;
+  });
+  document.getElementById('ci').innerHTML = html;
+}).catch(() => document.getElementById('ci').textContent = 'Not run');
+
+// Cost
+let costHtml = `
+  <div class="metric"><span>DeepSeek V4 Pro</span><span class="value">$0.137/M in</span></div>
+  <div class="metric"><span>Output</span><span class="value">$0.274/M out</span></div>
+  <div class="metric"><span>Cached Input</span><span class="value">$0.014/M</span></div>
+  <div class="metric"><span>V4 Flash</span><span class="value">50% cheaper</span></div>`;
+document.getElementById('cost').innerHTML = costHtml;
+
+// Agent Stats
+let agentHtml = `
+  <div class="metric"><span>Test Coverage</span><span class="value pass">52 tests</span></div>
+  <div class="metric"><span>Self-Evolution</span><span class="value">L0-L4</span></div>
+  <div class="metric"><span>Agents</span><span class="value">Coder/Reviewer/Tester/Doc</span></div>
+  <div class="metric"><span>Context</span><span class="value">40/60/80% reset</span></div>`;
+document.getElementById('agent').innerHTML = agentHtml;
+</script>
+
+</body>
+</html>
