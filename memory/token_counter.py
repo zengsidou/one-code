@@ -20,6 +20,7 @@ class TokenCounter:
         except Exception:
             self._encoder = None
 
+    @staticmethod
     def _is_cjk(ch: str) -> bool:
         cp = ord(ch)
         return (
