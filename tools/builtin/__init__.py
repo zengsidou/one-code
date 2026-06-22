@@ -323,3 +323,14 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
             return f"[SubAgent完成] {result}"
         except Exception as e:
             return f"[ERROR] SubAgent 执行失败: {e}"
+
+    # ━━━ 工具别名（LLM 可能用不同名称调用）━━━
+    registry.add_alias("search_content", "grep")
+    registry.add_alias("search_file", "grep")
+    registry.add_alias("find_files", "glob")
+    registry.add_alias("read", "read_file")
+    registry.add_alias("write", "write_file")
+    registry.add_alias("edit", "edit_file")
+    registry.add_alias("execute", "run_shell")
+    registry.add_alias("bash", "run_shell")
+    registry.add_alias("shell", "run_shell")

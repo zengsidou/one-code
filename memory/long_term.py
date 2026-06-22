@@ -24,6 +24,8 @@ class LongTermMemory:
             return self._client.create_collection(name=self.collection_name)
 
     def store(self, text: str, metadata: dict | None = None):
+        if self.llm is None:
+            return
         doc_id = hashlib.md5(f"{text}{time.time()}".encode()).hexdigest()[:16]
         embedding = self.llm.embed(text)
         try:
@@ -43,6 +45,8 @@ class LongTermMemory:
             )
 
     def retrieve(self, query: str, top_k: int = 5) -> list[str]:
+        if self.llm is None:
+            return []
         embedding = self.llm.embed(query)
         if all(v == 0.0 for v in embedding):
             return []

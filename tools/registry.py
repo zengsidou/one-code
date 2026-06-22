@@ -28,6 +28,7 @@ class ToolRegistry:
     def __init__(self, safe_mode: bool = True, permissions=None, audit=None):
         self._tools: dict[str, Callable] = {}
         self._tool_metadata: dict[str, dict] = {}
+        self._tool_aliases: dict[str, str] = {}
         self.safe_mode = safe_mode
         self.permissions = permissions
         self.audit = audit
@@ -52,6 +53,9 @@ class ToolRegistry:
     def get_schemas(self) -> list[dict]:
         return [m["schema"] for m in self._tool_metadata.values()]
 
+    def add_alias(self, alias: str, target: str):
+        self._tool_aliases[alias] = target
+
     def get_tools_description(self) -> str:
         lines = []
         for name, meta in self._tool_metadata.items():
@@ -61,6 +65,7 @@ class ToolRegistry:
     def execute(self, name: str, arguments: dict) -> str:
         import inspect
 
+        name = self._tool_aliases.get(name, name)
         func = self._tools.get(name)
         if func is None:
             return f"[ERROR] Unknown tool: {name}"
