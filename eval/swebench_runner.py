@@ -294,6 +294,12 @@ class SWEBenchRunner:
         m = re.search(r"\[PATCH\](.*?)(?:\[END\]|$)", agent_output, re.DOTALL | re.IGNORECASE)
         if m:
             content = m.group(1).strip()
+            # Strip markdown code block markers
+            for marker in ["```diff", "```"]:
+                if content.startswith(marker):
+                    content = content[len(marker):].strip()
+                if content.endswith("```"):
+                    content = content[:-3].strip()
             if "diff --git" in content:
                 return content
 
