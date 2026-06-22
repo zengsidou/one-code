@@ -956,14 +956,6 @@ class AgentLoop:
             count=3,
         )
 
-        # 为每个挑战生成 buggy fixture 文件
-        for ch in challenges:
-            fixture = self._challenge_gen.create_fixture(
-                ch.get("task", ""), ch.get("difficulty", 2)
-            )
-            if fixture:
-                ch["fixture"] = fixture
-
         return {
             "growth_summary": self._ability_profile.get_growth_summary(),
             "weak_areas": weak,
