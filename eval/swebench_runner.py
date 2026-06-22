@@ -160,25 +160,37 @@ class SWEBenchRunner:
 
         if repo_dir.exists():
             try:
+                # Reset any changes from previous instances
+                subprocess.run(
+                    ["git", "checkout", "--", "."],
+                    capture_output=True, timeout=30, cwd=str(repo_dir), env=env,
+                )
+                subprocess.run(
+                    ["git", "clean", "-fdx"],
+                    capture_output=True, timeout=60, cwd=str(repo_dir), env=env,
+                )
+                # Fetch the target commit
                 subprocess.run(
                     ["git", "fetch", "origin", base_commit, "--depth=1"],
                     capture_output=True, timeout=120, cwd=str(repo_dir), env=env, check=True,
                 )
-                r = git.Repo(str(repo_dir))
                 subprocess.run(
-                    ["git", "checkout", base_commit],
+                    ["git", "checkout", "-f", base_commit],
                     capture_output=True, timeout=60, cwd=str(repo_dir), env=env, check=True,
                 )
                 subprocess.run(
                     ["git", "clean", "-fdx"],
-                    capture_output=True, timeout=60, cwd=str(repo_dir), env=env, check=True,
+                    capture_output=True, timeout=60, cwd=str(repo_dir), env=env,
                 )
+                print(f"  Reusing cached repo at {base_commit[:8]}")
                 return repo_dir
             except Exception:
                 shutil.rmtree(str(repo_dir), ignore_errors=True)
 
         try:
             print(f"  Cloning {instance['repo']} ...")
+            if repo_dir.exists():
+                shutil.rmtree(str(repo_dir), ignore_errors=True)
             subprocess.run(
                 ["git", "clone", "--depth=1", clone_url, str(repo_dir)],
                 capture_output=True, timeout=300, env=env, check=True,
