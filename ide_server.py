@@ -295,6 +295,9 @@ def main():
     print(f"  {C.G}在浏览器中打开 http://localhost:{port}{C.W}")
     print()
 
+    import webbrowser
+    webbrowser.open(f"http://127.0.0.1:{port}")
+
     app.run(host="127.0.0.1", port=port, debug=False)
 
 
