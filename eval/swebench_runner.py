@@ -160,16 +160,14 @@ class SWEBenchRunner:
 
         if repo_dir.exists():
             try:
-                # Reset any changes from previous instances
-                subprocess.run(
+                # Aggressive reset to clean state from previous instances
+                for cmd in [
+                    ["git", "reset", "--hard", "HEAD"],
                     ["git", "checkout", "--", "."],
-                    capture_output=True, timeout=30, cwd=str(repo_dir), env=env,
-                )
-                subprocess.run(
                     ["git", "clean", "-fdx"],
-                    capture_output=True, timeout=60, cwd=str(repo_dir), env=env,
-                )
-                # Fetch the target commit
+                ]:
+                    subprocess.run(cmd, capture_output=True, timeout=30, cwd=str(repo_dir), env=env)
+                # Fetch target commit
                 subprocess.run(
                     ["git", "fetch", "origin", base_commit, "--depth=1"],
                     capture_output=True, timeout=120, cwd=str(repo_dir), env=env, check=True,
@@ -182,7 +180,7 @@ class SWEBenchRunner:
                     ["git", "clean", "-fdx"],
                     capture_output=True, timeout=60, cwd=str(repo_dir), env=env,
                 )
-                print(f"  Reusing cached repo at {base_commit[:8]}")
+                print(f"  Reusing repo at {base_commit[:8]}")
                 return repo_dir
             except Exception:
                 shutil.rmtree(str(repo_dir), ignore_errors=True)
