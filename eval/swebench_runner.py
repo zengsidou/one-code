@@ -332,16 +332,22 @@ class SWEBenchRunner:
         passed = 0
         for test_case in fail_to_pass:
             try:
+                # Convert test format: 'method (module.Class)' → 'module.Class.method'
+                test_name = test_case
+                m = re.match(r'(.+?)\s+\((.+?)\)', test_case)
+                if m:
+                    test_name = f'{m.group(2)}.{m.group(1)}'
+                
                 # Django uses Docker + runtests.py (needs full env)
                 if "django" in (instance.get("repo") or ""):
                     cmd = (
                         "docker run --rm "
                         f'-v "{repo.absolute()}:/repo" -w /repo '
                         "python:3.10-slim bash -c "
-                        f'"pip install -e /repo -q && python tests/runtests.py --settings=test_sqlite -v 0 {test_case}"'
+                        f'"pip install -e /repo -q && python tests/runtests.py --settings=test_sqlite -v 0 {test_name}"'
                     )
                 else:
-                    cmd = f"python -m pytest {test_case} -x -q --no-header 2>&1"
+                    cmd = f"python -m pytest {test_name} -x -q --no-header 2>&1"
                 proc = subprocess.run(
                     cmd, shell=True, capture_output=True, timeout=120,
                     encoding="utf-8", errors="replace",
