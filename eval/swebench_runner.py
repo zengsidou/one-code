@@ -18,7 +18,6 @@ from pathlib import Path
 
 import git
 from datasets import load_dataset
-from unidiff import PatchSet
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -327,22 +326,28 @@ class SWEBenchRunner:
         with open(patch_path, "w", encoding="utf-8") as f:
             f.write(normalized)
 
-        # Try git apply (more lenient than PatchSet parser)
+        # Try git apply via stdin (avoids file path issues on Windows)
+        normalized = patch.replace("\\", "/")
         try:
-            r = git.Repo(str(repo))
-            patch_abs = str(patch_path.absolute()).replace("\\", "/")
-            r.git.apply(patch_abs, "--verbose")
+            subprocess.run(
+                ["git", "apply", "--verbose"],
+                input=normalized, capture_output=True, timeout=30,
+                cwd=str(repo), encoding="utf-8", errors="replace", check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            err = (e.stderr or "")[:150]
+            return False, f"apply: {err}"
         except Exception as e:
-            return False, f"apply: {str(e)[:150]}"
+            return False, f"apply_exc: {e}"
 
         if instance.get("test_patch"):
-            test_patch_path = repo / "_test_patch.diff"
             tp = (instance["test_patch"] or "").replace("\\", "/")
-            with open(test_patch_path, "w", encoding="utf-8") as f:
-                f.write(tp)
             try:
-                test_abs = str(test_patch_path.absolute()).replace("\\", "/")
-                r.git.apply(test_abs, "--verbose")
+                subprocess.run(
+                    ["git", "apply", "--verbose"],
+                    input=tp, capture_output=True, timeout=30,
+                    cwd=str(repo), encoding="utf-8", errors="replace",
+                )
             except Exception:
                 pass
 
