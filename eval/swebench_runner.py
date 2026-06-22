@@ -322,22 +322,17 @@ class SWEBenchRunner:
         if not patch:
             return False, "empty_patch"
 
-        try:
-            PatchSet.from_string(patch)
-        except Exception as e:
-            return False, f"patch_parse: {e}"
-
         patch_path = repo / "_agent_patch.diff"
-        # Normalize patch for Windows git: forward slashes in diff paths
         normalized = patch.replace("\\", "/")
         with open(patch_path, "w", encoding="utf-8") as f:
             f.write(normalized)
 
+        # Try git apply (more lenient than PatchSet parser)
         try:
             r = git.Repo(str(repo))
             r.git.apply(str(patch_path), "--verbose")
         except Exception as e:
-            return False, f"patch_apply: {str(e)[:150]}"
+            return False, f"apply: {str(e)[:150]}"
 
         if instance.get("test_patch"):
             test_patch_path = repo / "_test_patch.diff"
