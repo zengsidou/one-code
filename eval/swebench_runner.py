@@ -317,41 +317,84 @@ class SWEBenchRunner:
         return ""
 
     def apply_and_test(self, instance: dict, patch: str, repo: Path) -> tuple[bool, str]:
-        """Apply generated patch and run FAIL_TO_PASS tests. Returns (resolved, reason)."""
-        if not patch:
-            return False, "empty_patch"
-
-        patch_path = repo / "_agent_patch.diff"
-        normalized = patch.replace("\\", "/")
-        with open(patch_path, "w", encoding="utf-8") as f:
-            f.write(normalized)
-
-        # Try git apply via stdin (avoids file path issues on Windows)
-        normalized = patch.replace("\\", "/")
-        try:
-            subprocess.run(
-                ["git", "apply", "--verbose"],
-                input=normalized, capture_output=True, timeout=30,
-                cwd=str(repo), encoding="utf-8", errors="replace", check=True,
-            )
-        except subprocess.CalledProcessError as e:
-            err = (e.stderr or "")[:150]
-            return False, f"apply: {err}"
-        except Exception as e:
-            return False, f"apply_exc: {e}"
-
+        """Run FAIL_TO_PASS tests. Agent already modified files via write_file.
+        Only need to apply test_patch and run tests.
+        Returns (resolved, reason)."""
+        
+        # Apply test_patch directly (skip git apply, write files directly)
         if instance.get("test_patch"):
-            tp = (instance["test_patch"] or "").replace("\\", "/")
+            self._apply_unified_diff(str(repo), instance["test_patch"])
+
+        fail_to_pass = json.loads(instance.get("FAIL_TO_PASS", "[]"))
+        if not fail_to_pass:
+            return False, "no_tests"
+
+        passed = 0
+        for test_case in fail_to_pass:
             try:
-                subprocess.run(
-                    ["git", "apply", "--verbose"],
-                    input=tp, capture_output=True, timeout=30,
+                proc = subprocess.run(
+                    f"python -m pytest {test_case} -x -q --no-header 2>&1",
+                    shell=True, capture_output=True, timeout=120,
                     cwd=str(repo), encoding="utf-8", errors="replace",
                 )
+                if proc.returncode == 0:
+                    passed += 1
             except Exception:
                 pass
 
-        fail_to_pass = json.loads(instance.get("FAIL_TO_PASS", "[]"))
+        resolved = passed == len(fail_to_pass) and passed > 0
+        return resolved, f"{passed}/{len(fail_to_pass)} tests"
+
+    @staticmethod
+    def _apply_unified_diff(repo_root: str, diff_text: str):
+        """Apply unified diff by directly modifying files (not git apply)."""
+        import re
+        current_file = None
+        file_content = None
+        file_lines = None
+        
+        for section in re.split(r"\ndiff --git ", "\n" + diff_text):
+            if not section.strip():
+                continue
+            
+            # Parse: a/path b/path
+            m = re.search(r"a/(.+?)\s+b/(.+?)(?:\n|$)", section)
+            if m:
+                file_path = m.group(1)
+                full_path = os.path.join(repo_root, file_path)
+                if os.path.exists(full_path):
+                    with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                        file_content = f.read()
+                    file_lines = file_content.split("\n")
+            
+            # Apply hunks
+            hunks = list(re.finditer(r"@@ -(\d+),?(\d*)\s+\+(\d+),?(\d*)\s+@@(.*?)(?=@@|\Z)", section, re.DOTALL))
+            if not hunks or not file_lines or not file_path:
+                continue
+            
+            new_lines = list(file_lines)
+            offset = 0
+            for hunk in reversed(hunks):
+                old_start = int(hunk.group(1)) - 1
+                old_count = int(hunk.group(2)) if hunk.group(2) else 1
+                hunk_text = hunk.group(5)
+                
+                idx = old_start
+                removed = 0
+                for line in hunk_text.split("\n"):
+                    line = line.strip("\r")
+                    if line.startswith("-") and idx < len(new_lines):
+                        del new_lines[idx]
+                        removed += 1
+                    elif line.startswith("+"):
+                        new_lines.insert(idx, line[1:])
+                        idx += 1
+                    elif not line.startswith("+"):
+                        idx += 1
+            
+            full_path = os.path.join(repo_root, file_path)
+            with open(full_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(new_lines))
         if not fail_to_pass:
             return False, "no_tests"
 
