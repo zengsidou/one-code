@@ -59,9 +59,28 @@ class ToolRegistry:
         return "\n".join(lines)
 
     def execute(self, name: str, arguments: dict) -> str:
+        import inspect
+
         func = self._tools.get(name)
         if func is None:
             return f"[ERROR] Unknown tool: {name}"
+
+        # ━━━ 参数类型校验与强制转换 ━━━
+        try:
+            sig = inspect.signature(func)
+            cleaned = {}
+            for pname, param in sig.parameters.items():
+                val = arguments.get(pname, param.default if param.default is not inspect.Parameter.empty else None)
+                if val is inspect.Parameter.empty or val is None:
+                    cleaned[pname] = val
+                    continue
+                anno = param.annotation
+                if anno is not inspect.Parameter.empty:
+                    val = self._coerce_arg(val, anno, pname)
+                cleaned[pname] = val
+            arguments = cleaned
+        except Exception:
+            pass  # 签名解析失败，用原始参数
 
         # ━━━ 权限检查 ━━━
         if self.permissions:
@@ -86,6 +105,36 @@ class ToolRegistry:
             return output
         except Exception as e:
             return f"[ERROR] Tool '{name}' failed: {e}"
+
+    @staticmethod
+    def _coerce_arg(val, expected_type, param_name: str):
+        origin = getattr(expected_type, "__origin__", None)
+        if origin is not None:
+            args = getattr(expected_type, "__args__", ())
+            if origin in (list, tuple):
+                if isinstance(val, str):
+                    return [val]
+                return val
+            return val
+        if expected_type in (str, int, float, bool):
+            if isinstance(val, expected_type):
+                return val
+            if expected_type is str and isinstance(val, dict):
+                import json
+                try:
+                    return json.dumps(val, ensure_ascii=False)
+                except Exception:
+                    return str(val)
+            if expected_type is str and not isinstance(val, str):
+                return str(val)
+            if expected_type is int and isinstance(val, str) and val.isdigit():
+                return int(val)
+            if expected_type is float and isinstance(val, (int, str)):
+                try:
+                    return float(val)
+                except (ValueError, TypeError):
+                    pass
+        return val
 
     def _intercept_dangerous(self, command: str) -> str | None:
         for pattern in DANGEROUS_PATTERNS:
