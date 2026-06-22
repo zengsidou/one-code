@@ -117,6 +117,7 @@ class AgentLoop:
         loop_detect_threshold: int = 3,
         plan_first: bool = False,
         observability=None,
+        rules=None,
     ):
         if llm is not None:
             self.llm = llm
@@ -139,6 +140,7 @@ class AgentLoop:
         self._plan_first = plan_first
         self._current_plan: list[dict] = []
         self.observability = observability
+        self._rules = rules
         self._error_count = 0
         self._max_errors = 5
 
@@ -472,6 +474,10 @@ class AgentLoop:
             hint = self._skill_library.to_prompt_hint(top_skills)
             if hint:
                 base += hint
+        if self._rules:
+            rules_hint = self._rules.inject_rules()
+            if rules_hint:
+                base += rules_hint
         return base
 
     def _plan_and_execute(self, user_input: str, debug: bool = False) -> str:
@@ -628,6 +634,13 @@ class AgentLoop:
             error_type=error_type,
         )
         self._last_failure_cases.append(case)
+
+        # ━━━ AGENTS.md 规则自动积累 ━━━
+        if self._rules:
+            trace = "\n".join(self._step_trace[-8:]) if self._step_trace else ""
+            self._rules.learn_from_failure(
+                task=task_desc, error=error_msg, trace=trace,
+            )
 
     def _try_self_heal(self, user_input: str, debug: bool = False) -> str:
         """自动触发自优化并重试执行
@@ -880,6 +893,15 @@ class AgentLoop:
 
         # 2. 提取技能
         self._skill_library.add_from_post_mortem(reflection)
+
+        # ━━━ AGENTS.md 规则自动积累（非完美运行） ━━━
+        if self._rules and (is_failure or reflection.get("efficiency_score", 5) < 4):
+            trace = "\n".join(self._step_trace[-8:]) if self._step_trace else ""
+            self._rules.learn_from_failure(
+                task=task_desc,
+                error=result[:300] if is_failure else reflection.get("what_could_be_better", [""])[0],
+                trace=trace,
+            )
 
         # 3. 记录能力画像
         difficulty = reflection.get("difficulty_for_agent", 3)
