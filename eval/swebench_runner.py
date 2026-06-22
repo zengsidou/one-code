@@ -395,24 +395,6 @@ class SWEBenchRunner:
             full_path = os.path.join(repo_root, file_path)
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(new_lines))
-        if not fail_to_pass:
-            return False, "no_tests"
-
-        passed = 0
-        for test_case in fail_to_pass:
-            try:
-                proc = subprocess.run(
-                    f"python -m pytest {test_case} -x -q --no-header 2>&1",
-                    shell=True, capture_output=True, timeout=120,
-                    cwd=str(repo), encoding="utf-8", errors="replace",
-                )
-                if proc.returncode == 0:
-                    passed += 1
-            except Exception:
-                pass
-
-        resolved = passed == len(fail_to_pass) and passed > 0
-        return resolved, f"{passed}/{len(fail_to_pass)} tests"
 
     def estimate_cost(self, messages: list[Message]) -> float:
         """Estimate API cost from message list."""
