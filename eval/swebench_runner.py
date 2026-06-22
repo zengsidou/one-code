@@ -30,34 +30,17 @@ from agent.models import Message
 
 AGENT_SYSTEM_PROMPT = (
     DEFAULT_SYSTEM_PROMPT
-    + "\n\n=== SWE-BENCH EVALUATION MODE (Agentless 3-Phase Strategy) ===\n"
-    "你正在参与 SWE-bench 代码修复评测。按三阶段严格执行：\n\n"
-    "## 阶段 1: 定位（Localize）— 不要急着修改\n"
-    "1. 用 list_dir 查看项目顶层结构\n"
-    "2. 用 grep 搜索 issue 中的关键词（函数名、类名、错误信息片段）\n"
-    "3. 用 read_file 阅读候选文件的相关区域（不是整个文件）\n"
-    "4. 确认找到了 bug 位置后再进入阶段 2\n\n"
-    "## 阶段 2: 修复（Repair）— 最小变更\n"
-    "5. 只修改必要的几行代码\n"
-    "6. 用 write_file 写入修复后的完整文件\n"
-    "7. 修复原则：最小变更、不改无关代码、不加注释\n\n"
-    "## 阶段 3: 验证（Validate）— 跑测试\n"
-    "8. 用 run_shell 运行相关的测试\n"
-    "9. 如果测试失败：读错误输出 → 回到阶段 1 重新定位 → 修正\n"
-    "10. 测试通过后，输出 [PATCH] 开头的 unified diff\n\n"
-    "## 关键规则\n"
-    "- SWE-bench 的修复通常只有 1-5 行，不要大改\n"
-    "- 如果 3 次尝试都无法定位，尝试搜索 issue 描述中的代码片段\n"
-    "- 测试命令格式：python -m pytest tests/path/test_file.py::test_name -x\n"
-    "- 输出 unified diff 格式：\n"
-    "```diff\n"
-    "diff --git a/path/to/file b/path/to/file\n"
-    "--- a/path/to/file\n"
-    "+++ b/path/to/file\n"
-    "@@ -line,count +line,count @@\n"
-    "- old code\n"
-    "+ new code\n"
-    "```"
+    + "\n\n=== SWE-BENCH EVALUATION MODE ===\n"
+    "按三阶段执行：定位 → 修复 → 验证\n\n"
+    "## 定位：从 issue 提取关键词搜索\n"
+    "- 提取变量名/函数名/类名，用 grep 精确搜索\n"
+    "- 永远不要搜索 docs/ 目录\n"
+    "- 配置/默认值类 issue 优先查 settings.py 和 global_settings.py\n"
+    "## 修复：最小变更\n"
+    "- 只改 1-5 行，保持风格一致\n"
+    "## 验证：跑测试\n"
+    "- 用 run_shell 跑 pytest\n"
+    "- 通过后输出 [PATCH] 及 unified diff" 
 )
 
 
@@ -154,6 +137,10 @@ class SWEBenchRunner:
         clone_url = self._get_clone_url(instance["repo"])
 
         env = os.environ.copy()
+        env.pop("HTTPS_PROXY", None)
+        env.pop("HTTP_PROXY", None)
+        env.pop("https_proxy", None)
+        env.pop("http_proxy", None)
         if self.git_proxy and "github.com" in clone_url:
             env["HTTPS_PROXY"] = self.git_proxy
             env["HTTP_PROXY"] = self.git_proxy
@@ -315,29 +302,26 @@ class SWEBenchRunner:
 
         return ""
 
-    def apply_and_test(self, instance: dict, patch: str, repo: Path) -> bool:
-        """Apply generated patch and run FAIL_TO_PASS tests."""
+    def apply_and_test(self, instance: dict, patch: str, repo: Path) -> tuple[bool, str]:
+        """Apply generated patch and run FAIL_TO_PASS tests. Returns (resolved, reason)."""
         if not patch:
-            return False
+            return False, "empty_patch"
 
         try:
-            PatchSet.parse(patch)
-        except Exception:
-            return False
+            PatchSet.from_string(patch)
+        except Exception as e:
+            return False, f"patch_parse: {e}"
 
-        # Write patch to file
         patch_path = repo / "_agent_patch.diff"
         with open(patch_path, "w", encoding="utf-8") as f:
             f.write(patch)
 
-        # Apply patch
         try:
             r = git.Repo(str(repo))
             r.git.apply(str(patch_path), "--verbose")
-        except Exception:
-            return False
+        except Exception as e:
+            return False, f"patch_apply: {str(e)[:150]}"
 
-        # Apply test patch
         if instance.get("test_patch"):
             test_patch_path = repo / "_test_patch.diff"
             with open(test_patch_path, "w", encoding="utf-8") as f:
@@ -347,24 +331,25 @@ class SWEBenchRunner:
             except Exception:
                 pass
 
-        # Run FAIL_TO_PASS tests
         fail_to_pass = json.loads(instance.get("FAIL_TO_PASS", "[]"))
         if not fail_to_pass:
-            return False
+            return False, "no_tests"
 
+        passed = 0
         for test_case in fail_to_pass:
             try:
                 proc = subprocess.run(
-                    f"python -m pytest {test_case} -x -q 2>nul",
+                    f"python -m pytest {test_case} -x -q --no-header 2>&1",
                     shell=True, capture_output=True, timeout=120,
                     cwd=str(repo), encoding="utf-8", errors="replace",
                 )
-                if proc.returncode != 0:
-                    return False
+                if proc.returncode == 0:
+                    passed += 1
             except Exception:
-                return False
+                pass
 
-        return True
+        resolved = passed == len(fail_to_pass) and passed > 0
+        return resolved, f"{passed}/{len(fail_to_pass)} tests"
 
     def estimate_cost(self, messages: list[Message]) -> float:
         """Estimate API cost from message list."""
@@ -425,8 +410,9 @@ class SWEBenchRunner:
             print(f"  Steps: {result.steps}, Time: {result.elapsed_sec:.1f}s, Cost: ${result.cost_usd:.4f}")
             print(f"  Patch: {len(result.generated_patch)} bytes")
 
-            result.resolved = self.apply_and_test(instance, result.generated_patch, repo_dir)
-            print(f"  Resolved: {result.resolved}")
+            result.resolved, diag = self.apply_and_test(instance, result.generated_patch, repo_dir)
+            result.error = diag
+            print(f"  Patch: {len(result.generated_patch)} bytes → {diag}")
 
             # ━━━ 自动重试：首次失败时切换策略 ━━━
             if not result.resolved and not result.error and result.generated_patch:
@@ -442,7 +428,7 @@ class SWEBenchRunner:
                     retry_patch = self.extract_patch(retry_output)
                     if retry_patch:
                         print(f"  Retry patch: {len(retry_patch)} bytes")
-                        retry_resolved = self.apply_and_test(instance, retry_patch, repo_dir)
+                        retry_resolved, _ = self.apply_and_test(instance, retry_patch, repo_dir)
                         if retry_resolved:
                             result.resolved = True
                             result.generated_patch = retry_patch
