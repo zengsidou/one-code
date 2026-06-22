@@ -10,6 +10,8 @@ class MemoryManager:
     def __init__(self, short: ShortTermMemory, long: LongTermMemory):
         self.short_term = short
         self.long_term = long
+        if not short._long_term_store:
+            short._long_term_store = long
 
     def add_message(self, msg):
         self.short_term.add(msg)

@@ -344,7 +344,7 @@ class ArchitectureProposalGenerator:
 
         try:
             resp = self.llm.generate(
-                [Message(role="system", content="你是一个 Agent 架构师。只输出 JSON，不要任何解释。"),
+                [Message(role="system", content=system_msg),
                  Message(role="user", content=prompt)],
                 tools=None,
             )
@@ -561,11 +561,11 @@ class ArchitectureApplier:
         file_path = proposal.get("full_path", "")
         rel_path = self._get_relative_path(file_path)
 
-        # 导到模块名并重载
+        import importlib
         module_name = self.MODULE_MAP.get(rel_path)
+        mod = None
         if module_name:
             try:
-                import importlib
                 mod = importlib.import_module(module_name)
                 importlib.reload(mod)
             except Exception:
@@ -601,6 +601,11 @@ class ArchitectureApplier:
             self._last_test_output = test_output
             if not test_passed:
                 self.rollback_last()
+                if mod is not None:
+                    try:
+                        importlib.reload(mod)
+                    except Exception:
+                        pass
                 result["test_result"] = "failed"
                 result["test_output"] = test_output[:500]
                 result["error"] = "test_failed"

@@ -38,17 +38,9 @@ class SubAgent:
         messages = list(self._context)
         messages.append(Message(role="system", content=self.prompt))
         messages.append(Message(role="user", content=task))
-        last_tool_result = ""
 
         for step in range(self.max_steps):
-            context = list(messages)
-            if last_tool_result and step > 0:
-                context.append(Message(
-                    role="system",
-                    content="工具已返回结果。基于结果给出最终中文回复（带 Status/Summary 头）。不要继续调用工具。"
-                ))
-
-            response = self.llm.generate(context, tools=self.registry.get_schemas())
+            response = self.llm.generate(list(messages), tools=self.registry.get_schemas())
             tool_calls = response.tool_calls or []
 
             if not tool_calls:

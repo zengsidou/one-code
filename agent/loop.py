@@ -266,7 +266,8 @@ class AgentLoop:
             if debug:
                 print(f"  [DEBUG step={step}] fingerprints={self._tool_fingerprints[-5:]}")
 
-            context = self.memory.get_context(query=user_input)
+            query = user_input[:200] if len(user_input) > 200 else user_input
+            context = self.memory.get_context(query=query)
             context.insert(0, Message(role="system", content=self._build_system_prompt()))
 
             # ━━━ 上下文压力感知 ━━━
@@ -423,10 +424,9 @@ class AgentLoop:
         )
 
         self.memory.short_term._messages.clear()
-        return [
-            Message(role="system", content=handoff),
-            Message(role="user", content=current_task),
-        ]
+        self.memory.short_term.add(Message(role="system", content=handoff))
+        self.memory.short_term.add(Message(role="user", content=current_task))
+        return self.memory.short_term.get_messages()
 
     def _garbage_collect(self, workspace: str | None = None) -> None:
         """清理 Agent 运行时生成的冗余产物（对标 OpenAI 的后台清理 Agent）。

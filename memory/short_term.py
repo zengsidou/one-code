@@ -6,12 +6,13 @@ from .token_counter import TokenCounter
 
 
 class ShortTermMemory:
-    def __init__(self, max_tokens: int = 65536, max_messages: int = 200):
+    def __init__(self, max_tokens: int = 65536, max_messages: int = 200, long_term_store=None):
         self.max_tokens = max_tokens
         self.max_messages = max_messages
         self._messages: deque[Message] = deque()
         self._counter = TokenCounter()
         self._llm = None  # 注入 LLM 用于智能压缩
+        self._long_term_store = long_term_store
 
     def add(self, message: Message):
         self._messages.append(message)
@@ -150,24 +151,15 @@ class ShortTermMemory:
         """将最旧的消息转移到长期记忆存储，以释放短期记忆空间。
         转移策略：保留最近的 N 条消息（例如 50 条），将更旧的消息打包为摘要并存储到长期记忆。
         """
-        if len(self._messages) < 50:
+        if len(self._messages) < 50 or not self._long_term_store:
             return
-        # 保留最近 50 条消息
         keep_count = 50
         old_messages = list(self._messages)[:-keep_count]
         self._messages = deque(list(self._messages)[-keep_count:])
-        # 将旧消息打包为摘要（简单拼接，实际可调用 LLM 生成摘要）
         summary_content = "\n".join(
             f"{msg.role}: {str(msg.content or '')[:200]}" for msg in old_messages
         )
-        # 假设存在长期记忆存储模块（需导入或注入）
-        # 这里使用一个简单的内存字典模拟，实际应集成到持久化存储
-        if not hasattr(self, '_long_term_store'):
-            self._long_term_store = []
-        self._long_term_store.append({
-            'summary': summary_content,
-            'token_count': self._counter.count_messages(old_messages)
-        })
+        self._long_term_store.store(summary_content, {"role": "summary"})
 
     def retrieve_from_long_term(self, query: str) -> list[Message]:
         """根据查询从长期记忆中检索相关消息。
