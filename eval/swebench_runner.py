@@ -1,0 +1,508 @@
+# -*- coding: utf-8 -*-
+"""SWE-bench Lite evaluation harness for micro-agent.
+
+Runs micro-agent against SWE-bench Lite instances and reports resolution rate,
+cost, and performance metrics.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import traceback
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+import git
+from datasets import load_dataset
+from unidiff import PatchSet
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from agent.loop import AgentLoop, DEFAULT_SYSTEM_PROMPT
+from tools.registry import ToolRegistry
+from tools.builtin import register_builtin_tools
+from memory import MemoryManager
+from agent.models import Message
+
+AGENT_SYSTEM_PROMPT = (
+    DEFAULT_SYSTEM_PROMPT
+    + "\n\n=== SWE-BENCH EVALUATION MODE ===\n"
+    "你正在参与 SWE-bench 评测。你会收到一个 GitHub issue 描述。\n"
+    "任务流程：\n"
+    "1. 先用 list_dir 查看项目根目录结构\n"
+    "2. 用 grep 搜索 issue 中提到的关键词来定位相关文件\n"
+    "3. 用 read_file 仔细阅读相关代码\n"
+    "4. 定位 bug 后用 write_file 写入修复\n"
+    "5. 最后用 run_shell 跑测试验证修复\n"
+    "6. 修复完成后输出 [PATCH] 开头的 unified diff\n\n"
+    "重要：每一步只做一件事，不要同时调用多个工具。"
+    "如果文件太大(>8000字符)，尝试搜索更具体的关键词缩小范围。"
+)
+
+
+@dataclass
+class EvalResult:
+    instance_id: str
+    repo: str
+    resolved: bool = False
+    cost_usd: float = 0.0
+    elapsed_sec: float = 0.0
+    steps: int = 0
+    error: str = ""
+    generated_patch: str = ""
+
+
+@dataclass
+class EvalReport:
+    total: int = 0
+    resolved: int = 0
+    resolution_rate: float = 0.0
+    avg_cost: float = 0.0
+    avg_time: float = 0.0
+    avg_steps: float = 0.0
+    results: list[EvalResult] = field(default_factory=list)
+    timestamp: str = ""
+
+
+class SWEBenchRunner:
+    """Runs micro-agent against SWE-bench Lite instances."""
+
+    REPOS_DIR = Path("./eval/repos")
+    RESULTS_DIR = Path("./eval/results")
+
+    # GitHub → Gitee mirror mapping for repos blocked in China
+    GITEE_MIRRORS = {
+        "django/django": "https://gitee.com/mirrors/django.git",
+        "scikit-learn/scikit-learn": "https://gitee.com/mirrors/scikit-learn.git",
+        "sympy/sympy": "https://gitee.com/mirrors/sympy.git",
+        "pytest-dev/pytest": "https://gitee.com/mirrors/pytest.git",
+        "matplotlib/matplotlib": "https://gitee.com/mirrors/matplotlib.git",
+        "sphinx-doc/sphinx": "https://gitee.com/mirrors/sphinx.git",
+        "astropy/astropy": "https://gitee.com/mirrors/astropy.git",
+        "pylint-dev/pylint": "https://gitee.com/mirrors/pylint.git",
+        "psf/requests": "https://gitee.com/mirrors/requests.git",
+        "mwaskom/seaborn": "https://gitee.com/mirrors/seaborn.git",
+    }
+
+    def _get_clone_url(self, repo: str) -> str:
+        if repo in self.GITEE_MIRRORS:
+            return self.GITEE_MIRRORS[repo]
+        return f"https://github.com/{repo}.git"
+    PRICE_INPUT_PER_1M = 0.137   # ¥1/M → ~$0.137/M
+    PRICE_OUTPUT_PER_1M = 0.274  # ¥2/M → ~$0.274/M
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = "deepseek-v4-pro",
+        max_instances: int = 10,
+        max_steps_per_instance: int = 30,
+        timeout_per_instance: int = 600,
+        repo_filter: str | None = None,
+        git_proxy: str | None = "http://127.0.0.1:7993",
+    ):
+        self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
+        self.model = model
+        self.max_instances = max_instances
+        self.max_steps = max_steps_per_instance
+        self.timeout = timeout_per_instance
+        self.repo_filter = repo_filter
+        self.git_proxy = git_proxy
+
+        os.makedirs(self.REPOS_DIR, exist_ok=True)
+        os.makedirs(self.RESULTS_DIR, exist_ok=True)
+
+    def load_instances(self) -> list[dict]:
+        """Load SWE-bench Lite instances, optionally filtered."""
+        ds = load_dataset("princeton-nlp/SWE-bench_Lite", split="test")
+        instances = []
+        for row in ds:
+            d = dict(row)
+            if self.repo_filter and self.repo_filter not in d.get("repo", ""):
+                continue
+            instances.append(d)
+            if len(instances) >= self.max_instances:
+                break
+        return instances
+
+    def prepare_repo(self, instance: dict) -> Path | None:
+        """Clone or fetch repo at the base commit."""
+        repo_name = instance["repo"].replace("/", "__")
+        repo_dir = self.REPOS_DIR / repo_name
+        base_commit = instance["base_commit"]
+        clone_url = self._get_clone_url(instance["repo"])
+
+        env = os.environ.copy()
+        if self.git_proxy and "github.com" in clone_url:
+            env["HTTPS_PROXY"] = self.git_proxy
+            env["HTTP_PROXY"] = self.git_proxy
+
+        if repo_dir.exists():
+            try:
+                subprocess.run(
+                    ["git", "fetch", "origin", base_commit, "--depth=1"],
+                    capture_output=True, timeout=120, cwd=str(repo_dir), env=env, check=True,
+                )
+                r = git.Repo(str(repo_dir))
+                subprocess.run(
+                    ["git", "checkout", base_commit],
+                    capture_output=True, timeout=60, cwd=str(repo_dir), env=env, check=True,
+                )
+                subprocess.run(
+                    ["git", "clean", "-fdx"],
+                    capture_output=True, timeout=60, cwd=str(repo_dir), env=env, check=True,
+                )
+                return repo_dir
+            except Exception:
+                shutil.rmtree(str(repo_dir), ignore_errors=True)
+
+        try:
+            print(f"  Cloning {instance['repo']} ...")
+            subprocess.run(
+                ["git", "clone", "--depth=1", clone_url, str(repo_dir)],
+                capture_output=True, timeout=300, env=env, check=True,
+            )
+            subprocess.run(
+                ["git", "fetch", "origin", base_commit, "--depth=1"],
+                capture_output=True, timeout=120, cwd=str(repo_dir), env=env, check=True,
+            )
+            subprocess.run(
+                ["git", "checkout", base_commit],
+                capture_output=True, timeout=60, cwd=str(repo_dir), env=env, check=True,
+            )
+            return repo_dir
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr.decode("utf-8", errors="replace") if isinstance(e.stderr, bytes) else str(e.stderr)
+            print(f"  Clone failed: {stderr[:300]}")
+            return None
+        except Exception as e:
+            print(f"  Clone failed: {e}")
+            return None
+
+    def build_agent(self, workspace: Path) -> AgentLoop:
+        """Build micro-agent with workspace-aware tools."""
+        registry = ToolRegistry(safe_mode=False)
+        register_builtin_tools(registry)
+        self._override_tools_for_workspace(registry, workspace)
+
+        from llm.deepseek_api import DeepSeekAdapter
+        from memory.short_term import ShortTermMemory
+        from memory.long_term import LongTermMemory
+
+        llm = DeepSeekAdapter(api_key=self.api_key, model=self.model)
+        short_mem = ShortTermMemory(max_tokens=65536)
+        long_mem = LongTermMemory(llm=llm, collection_name="swebench_eval", persist_dir="./eval/eval_memory_db")
+        memory = MemoryManager(short=short_mem, long=long_mem)
+        agent = AgentLoop(
+            llm=llm,
+            registry=registry,
+            memory=memory,
+            max_steps=self.max_steps,
+            enable_self_optimize=False,
+            enable_evolution=False,
+        )
+        agent.system_prompt = AGENT_SYSTEM_PROMPT
+        return agent
+
+    def _override_tools_for_workspace(self, registry: ToolRegistry, workspace: Path):
+        """Point file tools to the instance workspace."""
+        ws = str(workspace)
+
+        def read_file(path: str) -> str:
+            full = os.path.join(ws, path) if not os.path.isabs(path) else path
+            try:
+                with open(full, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                return content[:8000] if len(content) > 8000 else content
+            except Exception as e:
+                return f"ERROR: {e}"
+
+        def write_file(path: str, content: str) -> str:
+            full = os.path.join(ws, path) if not os.path.isabs(path) else path
+            os.makedirs(os.path.dirname(full) or ws, exist_ok=True)
+            with open(full, "w", encoding="utf-8") as f:
+                f.write(content)
+            return f"Written {len(content)} bytes to {path}"
+
+        def list_dir(path: str = ".") -> str:
+            full = os.path.join(ws, path) if not os.path.isabs(path) else path
+            try:
+                entries = os.listdir(full)
+                return "\n".join(sorted(entries)[:100])
+            except Exception as e:
+                return f"ERROR: {e}"
+
+        def run_shell(command: str) -> str:
+            try:
+                proc = subprocess.run(
+                    command, shell=True, capture_output=True,
+                    timeout=120, cwd=str(workspace),
+                    encoding="utf-8", errors="replace",
+                )
+                out = (proc.stdout + proc.stderr)[:3000]
+                return out or "(no output)"
+            except subprocess.TimeoutExpired:
+                return "TIMEOUT (120s)"
+            except Exception as e:
+                return f"ERROR: {e}"
+
+        registry._tools.clear()
+        registry._tool_metadata.clear()
+        registry.register("read_file", "Read a file from the repository")(read_file)
+        registry.register("write_file", "Write content to a file in the repository")(write_file)
+        registry.register("list_dir", "List files in a directory")(list_dir)
+        registry.register("run_shell", "Run a shell command in the repo")(run_shell)
+
+        # Also register search tools
+        def grep_search(pattern: str) -> str:
+            try:
+                proc = subprocess.run(
+                    f'rg --no-heading -n "{pattern}" {ws} 2>nul || findstr /s /i /n /c:"{pattern}" {ws}\\*.* 2>nul || echo "not found"',
+                    shell=True, capture_output=True, timeout=30,
+                    cwd=str(workspace), encoding="utf-8", errors="replace",
+                )
+                out = (proc.stdout or proc.stderr)[:3000]
+                return out or "(no matches)"
+            except Exception as e:
+                return f"ERROR: {e}"
+
+        registry.register("grep", "Search for a pattern in all files")(grep_search)
+
+    def extract_patch(self, agent_output: str) -> str:
+        """Extract unified diff from agent output."""
+        m = re.search(r"\[PATCH\](.*?)(?:\[END\]|$)", agent_output, re.DOTALL | re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+
+        # Fallback: find diff-style content
+        for pattern in [r"diff --git.*?(?:\n(?!diff |@@ |\+|\-|\s)\w|\Z)", r"--- .*?\n\+{3}.*?\n@@.*?(?:\n[^\n@+-])"]:
+            matches = re.findall(pattern, agent_output, re.DOTALL)
+            if matches:
+                return "\n".join(matches)
+
+        return ""
+
+    def apply_and_test(self, instance: dict, patch: str, repo: Path) -> bool:
+        """Apply generated patch and run FAIL_TO_PASS tests."""
+        if not patch:
+            return False
+
+        try:
+            PatchSet.parse(patch)
+        except Exception:
+            return False
+
+        # Write patch to file
+        patch_path = repo / "_agent_patch.diff"
+        with open(patch_path, "w", encoding="utf-8") as f:
+            f.write(patch)
+
+        # Apply patch
+        try:
+            r = git.Repo(str(repo))
+            r.git.apply(str(patch_path), "--verbose")
+        except Exception:
+            return False
+
+        # Apply test patch
+        if instance.get("test_patch"):
+            test_patch_path = repo / "_test_patch.diff"
+            with open(test_patch_path, "w", encoding="utf-8") as f:
+                f.write(instance["test_patch"])
+            try:
+                r.git.apply(str(test_patch_path), "--verbose")
+            except Exception:
+                pass
+
+        # Run FAIL_TO_PASS tests
+        fail_to_pass = json.loads(instance.get("FAIL_TO_PASS", "[]"))
+        if not fail_to_pass:
+            return False
+
+        for test_case in fail_to_pass:
+            try:
+                proc = subprocess.run(
+                    f"python -m pytest {test_case} -x -q 2>nul",
+                    shell=True, capture_output=True, timeout=120,
+                    cwd=str(repo), encoding="utf-8", errors="replace",
+                )
+                if proc.returncode != 0:
+                    return False
+            except Exception:
+                return False
+
+        return True
+
+    def estimate_cost(self, messages: list[Message]) -> float:
+        """Estimate API cost from message list."""
+        input_chars = sum(len(m.content or "") for m in messages)
+        output_chars = sum(len(m.content or "") for m in messages if m.role == "assistant")
+        input_tokens = input_chars / 3.5
+        output_tokens = output_chars / 3.5
+        return (input_tokens / 1e6 * self.PRICE_INPUT_PER_1M
+                + output_tokens / 1e6 * self.PRICE_OUTPUT_PER_1M)
+
+    def run_one(self, instance: dict) -> EvalResult:
+        """Evaluate micro-agent on a single SWE-bench instance."""
+        result = EvalResult(
+            instance_id=instance["instance_id"],
+            repo=instance["repo"],
+        )
+
+        print(f"\n{'='*60}")
+        instance_id = instance["instance_id"]
+        repo_name = instance["repo"]
+        problem = instance["problem_statement"][:120].encode("ascii", errors="replace").decode("ascii")
+        print(f"[{instance_id}] {repo_name}")
+        print(f"  Issue: {problem}...")
+
+        repo_dir = self.prepare_repo(instance)
+        if not repo_dir:
+            result.error = "repo_prep_failed"
+            return result
+
+        agent = self.build_agent(repo_dir)
+        task = (
+            f"GitHub Issue:\n{instance['problem_statement']}\n\n"
+            f"Repository: {instance['repo']} at commit {instance['base_commit']}\n"
+            f"请修复这个 issue 并输出 [PATCH] 开头的 unified diff。"
+        )
+
+        start = time.time()
+        try:
+            output = agent.run(task)
+            result.elapsed_sec = time.time() - start
+            result.steps = getattr(agent, "_last_step_count", 0)
+            result.cost_usd = self.estimate_cost(agent.memory.short_term.get_messages())
+            result.generated_patch = self.extract_patch(output)
+            print(f"  Output ({len(output)} chars): {output[:300]}...")
+
+            print(f"  Steps: {result.steps}, Time: {result.elapsed_sec:.1f}s, Cost: ${result.cost_usd:.4f}")
+            print(f"  Patch: {len(result.generated_patch)} bytes")
+
+            result.resolved = self.apply_and_test(instance, result.generated_patch, repo_dir)
+            print(f"  Resolved: {result.resolved}")
+        except Exception as e:
+            result.elapsed_sec = time.time() - start
+            result.error = f"{type(e).__name__}: {e}"
+            traceback.print_exc()
+
+        return result
+
+    def run(self) -> EvalReport:
+        """Run full evaluation."""
+        instances = self.load_instances()
+        print(f"Loaded {len(instances)} instances")
+
+        report = EvalReport(
+            total=len(instances),
+            timestamp=datetime.now().isoformat(),
+        )
+
+        for i, instance in enumerate(instances):
+            print(f"\n[{i+1}/{len(instances)}] Running...")
+            result = self.run_one(instance)
+            report.results.append(result)
+            if result.resolved:
+                report.resolved += 1
+
+            self._save_progress(report)
+
+        report.resolution_rate = report.resolved / report.total if report.total else 0
+        resolved_results = [r for r in report.results if r.resolved]
+        all_results = [r for r in report.results if r.elapsed_sec > 0]
+
+        if all_results:
+            report.avg_cost = sum(r.cost_usd for r in all_results) / len(all_results)
+            report.avg_time = sum(r.elapsed_sec for r in all_results) / len(all_results)
+            report.avg_steps = sum(r.steps for r in all_results) / len(all_results)
+
+        self._save_report(report)
+        self._print_summary(report)
+        return report
+
+    def _save_progress(self, report: EvalReport):
+        """Save intermediate results."""
+        path = self.RESULTS_DIR / f"progress_{report.timestamp[:10]}.json"
+        data = {
+            "total": report.total,
+            "resolved": report.resolved,
+            "timestamp": report.timestamp,
+            "results": [
+                {
+                    "instance_id": r.instance_id,
+                    "repo": r.repo,
+                    "resolved": r.resolved,
+                    "cost_usd": r.cost_usd,
+                    "elapsed_sec": r.elapsed_sec,
+                    "steps": r.steps,
+                    "error": r.error,
+                }
+                for r in report.results
+            ],
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+    def _save_report(self, report: EvalReport):
+        """Save final evaluation report."""
+        path = self.RESULTS_DIR / f"report_{report.timestamp[:10]}.json"
+        data = {
+            "total": report.total,
+            "resolved": report.resolved,
+            "resolution_rate": report.resolution_rate,
+            "avg_cost_usd": report.avg_cost,
+            "avg_time_sec": report.avg_time,
+            "avg_steps": report.avg_steps,
+            "timestamp": report.timestamp,
+            "results": [
+                {
+                    "instance_id": r.instance_id,
+                    "repo": r.repo,
+                    "resolved": r.resolved,
+                    "cost_usd": round(r.cost_usd, 4),
+                    "elapsed_sec": round(r.elapsed_sec, 1),
+                    "steps": r.steps,
+                    "error": r.error,
+                }
+                for r in report.results
+            ],
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        print(f"\nReport saved to {path}")
+
+    def _print_summary(self, report: EvalReport):
+        """Print evaluation summary."""
+        print(f"\n{'='*60}")
+        print("SWE-BENCH LITE EVALUATION RESULTS")
+        print(f"{'='*60}")
+        print(f"  Instances:  {report.total}")
+        print(f"  Resolved:   {report.resolved}")
+        print(f"  Rate:       {report.resolution_rate:.1%}")
+        print(f"  Avg Cost:   ${report.avg_cost:.4f}")
+        print(f"  Avg Time:   {report.avg_time:.1f}s")
+        print(f"  Avg Steps:  {report.avg_steps:.1f}")
+        print(f"{'='*60}")
+
+
+if __name__ == "__main__":
+    import argparse
+    p = argparse.ArgumentParser(description="SWE-bench Lite evaluation for micro-agent")
+    p.add_argument("--max", type=int, default=5, help="Max instances (default: 5)")
+    p.add_argument("--repo", type=str, default=None, help="Filter by repo (e.g. django/django)")
+    p.add_argument("--model", type=str, default="deepseek-v4-pro")
+    p.add_argument("--steps", type=int, default=30)
+    args = p.parse_args()
+
+    runner = SWEBenchRunner(
+        max_instances=args.max,
+        repo_filter=args.repo,
+        model=args.model,
+        max_steps_per_instance=args.steps,
+    )
+    runner.run()
