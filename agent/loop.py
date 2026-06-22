@@ -118,6 +118,7 @@ class AgentLoop:
         plan_first: bool = False,
         observability=None,
         rules=None,
+        token_optimizer=None,
     ):
         if llm is not None:
             self.llm = llm
@@ -141,6 +142,7 @@ class AgentLoop:
         self._current_plan: list[dict] = []
         self.observability = observability
         self._rules = rules
+        self._token_opt = token_optimizer
         self._error_count = 0
         self._max_errors = 5
 
@@ -328,6 +330,9 @@ class AgentLoop:
                     if self.observability:
                         self.observability.trace_tool_start(step, tc.name, tc.arguments)
                     result = self.registry.execute(tc.name, tc.arguments)
+                    # ━━━ Token 优化：压缩工具输出 ━━━
+                    if self._token_opt:
+                        result = self._token_opt.compress_tool_output(result)
                     is_error = result.startswith("[ERROR]")
                     if self.observability:
                         self.observability.trace_tool_end(step, tc.name, result, error=is_error)

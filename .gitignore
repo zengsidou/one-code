@@ -24,4 +24,6 @@ eval/repos/
 eval/eval_memory_db/
 eval/results/
 AGENTS.md
+ci/reports/
+ci/latest.json
 
