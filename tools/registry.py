@@ -25,10 +25,12 @@ DANGEROUS_PATTERNS = [
 
 
 class ToolRegistry:
-    def __init__(self, safe_mode: bool = True):
+    def __init__(self, safe_mode: bool = True, permissions=None, audit=None):
         self._tools: dict[str, Callable] = {}
         self._tool_metadata: dict[str, dict] = {}
         self.safe_mode = safe_mode
+        self.permissions = permissions
+        self.audit = audit
 
     def register(self, name: str, description: str):
         def decorator(func: Callable):
@@ -60,6 +62,20 @@ class ToolRegistry:
         func = self._tools.get(name)
         if func is None:
             return f"[ERROR] Unknown tool: {name}"
+
+        # ━━━ 权限检查 ━━━
+        if self.permissions:
+            allowed, reason = self.permissions.check(name, arguments)
+            if self.audit:
+                risk = self.permissions.get_risk(name).value
+                self.audit.record(
+                    agent_id="default", action="tool_call",
+                    tool=name, details=str(arguments)[:200],
+                    risk_level=risk, allowed=allowed,
+                )
+            if not allowed:
+                return f"[BLOCKED] {reason}"
+
         try:
             result = func(**arguments)
             output = str(result) if result is not None else "Tool executed successfully."
