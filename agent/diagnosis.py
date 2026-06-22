@@ -74,4 +74,4 @@ class FailureDiagnosis:
 
     def get_unresolved(self) -> list[dict]:
         """返回尚未解决（无 root_cause 或 resolved=False）的 cases"""
-        return [c for c in self.cases if not c.get("resolved") or c.get("root_cause") is None]
+        return [c for c in self.cases if not c.get("resolved") and c.get("root_cause") is None]

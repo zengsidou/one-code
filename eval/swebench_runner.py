@@ -495,7 +495,7 @@ class SWEBenchRunner:
             print(f"  Patch: {len(result.generated_patch)} bytes → {diag}")
 
             # ━━━ 自动重试：首次失败时切换策略 ━━━
-            if not result.resolved and not result.error and result.generated_patch:
+            if not result.resolved and result.generated_patch and (not result.error or result.error == "0/3 tests" or "tests" in (result.error or "")):
                 print(f"  [RETRY] 首次失败，尝试 Plan-then-Execute 模式...")
                 retry_agent = self.build_agent(repo_dir, plan_first=True)
                 retry_task = (

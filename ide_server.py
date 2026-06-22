@@ -278,13 +278,7 @@ def _extract_self_guidance(reflection: str) -> str:
 
 
 def _extract_files_from_result(result: str) -> list[str]:
-    """从 agent 返回中提取涉及的文件名"""
-    import re
-    files = set()
-    for pat in [r"File written:\s*(\S+)", r"已替换\s*(\S+)", r"修复\s*(\S+\.py)"]:
-        for m in re.finditer(pat, result):
-            files.add(m.group(1))
-    return list(files)[:5]
+    return list(_extract_files_from_result(agent_response))[:5]
 
 
 def main():

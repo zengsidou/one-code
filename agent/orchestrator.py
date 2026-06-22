@@ -27,9 +27,12 @@ class AgentOrchestrator:
 
         results = []
         with ThreadPoolExecutor(max_workers=min(len(tasks), 4)) as executor:
-            futures = {executor.submit(run_one, t): t for t in tasks}
-            for future in as_completed(futures):
-                results.append(future.result())
+            pairs = [(executor.submit(run_one, t), t) for t in tasks]
+            for future, task in pairs:
+                try:
+                    results.append(future.result())
+                except Exception:
+                    results.append({"task": task.get("task", str(task)), "result": None, "error": "fan_out failed"})
         return results
 
     def pipeline(self, tasks: list[dict], tool_allowlist: list[str] | None = None) -> list[dict]:

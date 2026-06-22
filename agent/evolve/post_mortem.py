@@ -83,6 +83,7 @@ class TaskPostMortem:
         ability_context: str = "",
     ) -> dict:
         """复盘一次任务执行"""
+        result = result or ""
         is_failure = "[STOPPED]" in result or "[ERROR]" in result
         result_status = "FAILED" if is_failure else "SUCCESS"
         result_preview = result[:500]

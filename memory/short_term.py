@@ -215,7 +215,7 @@ class ShortTermMemory:
         for m in messages:
             role = m.role
             c = str(m.content or "")[:300]
-            if m.tool_calls:
+            if getattr(m, "tool_calls", None):
                 c += f" [调用了: {', '.join(tc.name for tc in m.tool_calls)}]"
             conversation.append(f"[{role}] {c}")
 

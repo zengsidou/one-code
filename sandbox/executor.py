@@ -103,7 +103,12 @@ class SafeExecutor:
                     child.terminate()
                 except psutil.NoSuchProcess:
                     pass
-            psutil.wait_procs(children, timeout=3)
+            gone, alive = psutil.wait_procs(children, timeout=3)
+            for p in alive:
+                try:
+                    p.kill()
+                except psutil.NoSuchProcess:
+                    pass
             try:
                 parent.terminate()
             except psutil.NoSuchProcess:

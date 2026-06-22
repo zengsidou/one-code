@@ -29,7 +29,7 @@ class FilesystemJail:
                 abs_path.startswith(allowed + os.sep) or abs_path == allowed
                 for allowed in self._allowed
             )
-            if not is_allowed and abs_path != os.path.abspath("."):
+            if not is_allowed:
                 return False, f"Path not in allowed list: {abs_path}"
 
         if mode == "write":

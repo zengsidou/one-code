@@ -151,9 +151,14 @@ class RootCauseAnalyzer:
         cause = result.get("root_cause_type", "tool_error")
         fix = result.get("suggested_fix_type", "fix_tool_code")
 
+        try:
+            confidence = float(result.get("confidence", 0.5))
+        except (ValueError, TypeError):
+            confidence = 0.5
+
         return {
             "root_cause_type": cause if cause in valid_causes else "tool_error",
-            "confidence": float(result.get("confidence", 0.5)),
+            "confidence": confidence,
             "detail": result.get("detail", result.get("fix_description", "无详细说明")),
             "suggested_fix_type": fix if fix in valid_fixes else "fix_tool_code",
             "fix_description": result.get("fix_description", "无修复描述"),

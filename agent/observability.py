@@ -120,7 +120,7 @@ class Observability:
         output_tokens = int(output_chars / 3.5)
         self.current.input_tokens += input_tokens
         self.current.output_tokens += output_tokens
-        self.current.cost_usd = (
+        self.current.cost_usd += (
             input_tokens / 1e6 * self.PRICE_INPUT_PER_1M +
             output_tokens / 1e6 * self.PRICE_OUTPUT_PER_1M
         )

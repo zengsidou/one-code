@@ -77,12 +77,12 @@ class ToolRegistry:
                 return f"[BLOCKED] {reason}"
 
         try:
-            result = func(**arguments)
-            output = str(result) if result is not None else "Tool executed successfully."
-            if self.safe_mode:
-                danger = self._intercept_dangerous(output)
-                if danger:
-                    return danger
+        if self.safe_mode:
+            danger = self._intercept_dangerous(arguments)
+            if danger:
+                return danger
+        result = func(**arguments)
+        output = str(result) if result is not None else "Tool executed successfully."
             return output
         except Exception as e:
             return f"[ERROR] Tool '{name}' failed: {e}"

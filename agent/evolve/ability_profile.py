@@ -31,7 +31,8 @@ class AbilityProfile:
     def _load(self):
         if os.path.exists(self.filepath):
             with open(self.filepath, "r", encoding="utf-8") as f:
-                self.records = json.load(f)
+                try: self.records = json.load(f)
+                except (json.JSONDecodeError, IOError): self.records = []
 
     def _save(self):
         os.makedirs(os.path.dirname(self.filepath) or ".", exist_ok=True)

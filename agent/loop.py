@@ -315,7 +315,7 @@ class AgentLoop:
                 if self._detect_tool_loop(tool_calls, debug):
                     if self.observability:
                         self.observability.record_loop_detection()
-                    self.memory.add_message(Message(role="assistant", content=response.content or "", reasoning_content=response.reasoning_content))
+                    self.memory.add_message(Message(role="assistant", content=response.content or "", reasoning_content=getattr(response, "reasoning_content", "") or ""))
                     self._step_trace.append(f"Step{step}: LOOP_DETECTED")
                     if self.enable_self_optimize:
                         self._capture_failure(
@@ -328,7 +328,7 @@ class AgentLoop:
                 for tc in tool_calls:
                     tool_msg_content = f"调用工具: {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})"
                     self._step_trace.append(f"Step{step}: call {tc.name}")
-                    self.memory.add_message(Message(role="assistant", content=tool_msg_content, tool_calls=[tc], reasoning_content=response.reasoning_content))
+                    self.memory.add_message(Message(role="assistant", content=tool_msg_content, tool_calls=[tc], reasoning_content=getattr(response, "reasoning_content", "") or ""))
                     if self.observability:
                         self.observability.trace_tool_start(step, tc.name, tc.arguments)
                     result = self.registry.execute(tc.name, tc.arguments)
@@ -372,17 +372,17 @@ class AgentLoop:
             if idle_steps >= 2 or step >= self.max_steps:
                 self._step_trace.append(f"Step{step}: final_answer")
                 self._last_step_count = step
-                self.memory.add_message(Message(role="assistant", content=content, reasoning_content=response.reasoning_content))
+                self.memory.add_message(Message(role="assistant", content=content, reasoning_content=getattr(response, "reasoning_content", "") or ""))
                 return content
 
             # 空回复 → 提示继续
             if not content.strip():
-                self.memory.add_message(Message(role="assistant", content="", reasoning_content=response.reasoning_content))
+                self.memory.add_message(Message(role="assistant", content="", reasoning_content=getattr(response, "reasoning_content", "") or ""))
                 continue
 
             self._step_trace.append(f"Step{step}: final_answer")
             self._last_step_count = step
-            self.memory.add_message(Message(role="assistant", content=content, reasoning_content=response.reasoning_content))
+            self.memory.add_message(Message(role="assistant", content=content, reasoning_content=getattr(response, "reasoning_content", "") or ""))
             return content
 
     @staticmethod
@@ -1066,8 +1066,6 @@ class AgentLoop:
             if m:
                 new_prompt_text = m.group(1).strip()
                 # 直接更新运行时 prompt（无需重启）
-                global DEFAULT_SYSTEM_PROMPT
-                DEFAULT_SYSTEM_PROMPT = new_prompt_text
                 self.system_prompt = new_prompt_text
                 # 清除缓存以使用新提示
                 if hasattr(self, "_cached_tool_desc"):
@@ -1176,8 +1174,6 @@ class AgentLoop:
                         yaml.safe_load(f.read())
             except json.JSONDecodeError as e:
                 return {"passed": False, "reason": f"{fpath} JSON 语法错误: {e}"}
-            except Exception as e:
-                if ext in (".yaml", ".yml"):
-                    return {"passed": False, "reason": f"{fpath} YAML 语法错误: {e}"}
-
+        except Exception as e:
+            return {"passed": False, "reason": f"{fpath} 验证异常: {e}"}
         return {"passed": True}

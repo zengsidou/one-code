@@ -138,7 +138,7 @@ class TokenOptimizer:
                 # Keep system + first user + last 5 messages
                 result = [r for r in result if r.role in ("system",)]
                 result += [m for m in messages if m.role == "user"][:1]
-                result += result[-5:]
+                result += [m for m in messages if m.role != "system"][-5:]
                 break
 
         if tool_batch:

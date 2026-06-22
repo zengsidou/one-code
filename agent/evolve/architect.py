@@ -585,11 +585,14 @@ class ArchitectureApplier:
             elif parent_attr == "registry" and child_attr is None:
                 try:
                     from tools.builtin import register_builtin_tools
+                    saved_tools = dict(agent_instance.registry._tools)
+                    saved_metadata = dict(agent_instance.registry._tool_metadata)
                     agent_instance.registry._tools.clear()
                     agent_instance.registry._tool_metadata.clear()
                     register_builtin_tools(agent_instance.registry)
                 except Exception:
-                    pass
+                    agent_instance.registry._tools.update(saved_tools)
+                    agent_instance.registry._tool_metadata.update(saved_metadata)
 
         # ━━━ 自测试闭环：跑 pytest 验证改动没破坏任何东西 ━━━
         if run_tests:

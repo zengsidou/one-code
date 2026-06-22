@@ -107,7 +107,7 @@ class Permissions:
         if tool_name in ("write_file", "edit_file") and arguments:
             filepath = arguments.get("path") or arguments.get("filePath") or ""
             if filepath and self._workspace_root:
-                abs_path = os.path.abspath(filepath)
+                abs_path = os.path.abspath(os.path.join(self._workspace_root, filepath))
                 if not abs_path.startswith(self._workspace_root):
                     return False, f"文件路径 {filepath} 在工作区外，拒绝写入"
 

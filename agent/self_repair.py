@@ -115,7 +115,7 @@ class SelfRepair:
             fix["fixed"]["tool_descriptions"] = enriched
 
         elif fix_type == "trim_context":
-            old_tokens = current_config.get("memory_max_tokens", 4096)
+            old_tokens = current_config.get("memory_max_tokens") or 4096
             fix["original"]["memory_max_tokens"] = old_tokens
             fix["fixed"]["memory_max_tokens"] = max(1024, int(old_tokens * self.trim_ratio))
 

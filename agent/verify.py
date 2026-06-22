@@ -86,7 +86,7 @@ class VerifyRepair:
         for i, fix in enumerate(fixes):
             if not fix.get("applied"):
                 continue
-            task = original_tasks[i] if i < len(original_tasks) else original_tasks[0]
+            task = original_tasks[i] if i < len(original_tasks) else (original_tasks[0] if original_tasks else "验证任务")
             result = self.verify(fix, agent_loop, task)
             results.append(result)
         return results

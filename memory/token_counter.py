@@ -20,33 +20,31 @@ class TokenCounter:
         except Exception:
             self._encoder = None
 
+    def _is_cjk(ch: str) -> bool:
+        cp = ord(ch)
+        return (
+            0x2E80 <= cp <= 0x2EFF or
+            0x3000 <= cp <= 0x303F or
+            0x3040 <= cp <= 0x309F or
+            0x30A0 <= cp <= 0x30FF or
+            0x3400 <= cp <= 0x4DBF or
+            0x4E00 <= cp <= 0x9FFF or
+            0xF900 <= cp <= 0xFAFF or
+            0xFF00 <= cp <= 0xFFEF
+        )
+
     def count(self, text: str) -> int:
-        """计算文本的 token 数"""
-        if not text:
-            return 0
-        if self._encoder:
-            try:
-                return len(self._encoder.encode(text))
-            except Exception:
-                return self._estimate(text)
-        return self._estimate(text)
-
-    @staticmethod
-    def _estimate(text: str) -> int:
-        """词数估算 fallback
-
-        英文：按空格分词（1 word ≈ 1.3 tokens）
-        中文：每个字符 ≈ 1.5-2 tokens
+        """估算文本的 token 数量。
+        参考: CJK 字符约 1.5-2 tokens/字，英文约 1.3 tokens/词
         """
         total = 0
         buf = ""
         for ch in text:
-            if "\u4e00" <= ch <= "\u9fff" or "\u3000" <= ch <= "\u303f":
-                # CJK character: flush buffer, count char
+            if self._is_cjk(ch):
                 if buf:
                     total += max(1, int(len(buf.split()) * 1.3))
                     buf = ""
-                total += 1
+                total += 2
             elif ch.isspace():
                 buf += " "
             else:

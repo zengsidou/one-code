@@ -5,7 +5,7 @@ import json
 import time
 from agent.models import Message
 
-PROJECT_MEMORY_PATH = os.path.expanduser(r"~\.local\share\mimocode\memory\projects\global\MEMORY.md")
+PROJECT_MEMORY_PATH = os.path.join(os.path.expanduser("~"), ".local", "share", "mimocode", "memory", "projects", "global", "MEMORY.md")
 USER_PROFILE_PATH = "./user_profile.json"
 SESSION_STATE_PATH = "./session_state.json"
 

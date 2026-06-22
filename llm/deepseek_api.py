@@ -96,7 +96,7 @@ class DeepSeekAdapter(BaseLLM):
                     cleaned = self._clean_orphaned_tools(api_messages)
                     if len(cleaned) < len(api_messages):
                         api_messages = cleaned
-                        if attempt < self.max_retries + 1:
+                        if attempt < self.max_retries:
                             time.sleep(0.5)
                             continue
                 if attempt < self.max_retries:
@@ -158,10 +158,7 @@ class DeepSeekAdapter(BaseLLM):
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            try:
-                return json.loads(raw.replace("\\", "\\\\"))
-            except json.JSONDecodeError:
-                return {}
+            return {}
 
     def embed(self, text: str) -> list[float]:
         """DeepSeek 不提供原生 embedding API，返回零向量占位"""
