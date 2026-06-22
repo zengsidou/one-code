@@ -113,6 +113,7 @@ class AgentLoop:
         ability_profile_file: str = "./ability_profile.json",
         enable_orchestrate: bool = False,
         loop_detect_threshold: int = 3,
+        plan_first: bool = False,
     ):
         if llm is not None:
             self.llm = llm
@@ -132,6 +133,8 @@ class AgentLoop:
         self.max_steps = max_steps
         self._tool_fingerprints: list[str] = []
         self._loop_detect_threshold = loop_detect_threshold
+        self._plan_first = plan_first
+        self._current_plan: list[dict] = []
         self._error_count = 0
         self._max_errors = 5
 
@@ -201,7 +204,10 @@ class AgentLoop:
                 content="[前置指令] 先调用 search_web 搜索相关信息，找到可靠来源后用 fetch_url 读取详细内容，然后基于实际搜索结果回答。不要凭记忆编造。",
             ))
 
-        result = self._run_loop(user_input, debug)
+        if self._plan_first:
+            result = self._plan_and_execute(user_input, debug)
+        else:
+            result = self._run_loop(user_input, debug)
         if "[STOPPED]" in result and self.enable_self_optimize:
             result = self._try_self_heal(user_input, debug)
 
@@ -368,6 +374,101 @@ class AgentLoop:
             if hint:
                 base += hint
         return base
+
+    def _plan_and_execute(self, user_input: str, debug: bool = False) -> str:
+        """Plan-then-Execute 模式：先规划再执行。
+
+        1. Plan phase：LLM 生成结构化执行计划
+        2. Execute phase：按计划逐步执行，执行后验证
+        3. 不偏离计划；遇到失败可触发 re-plan
+        """
+        plan = self._generate_plan(user_input, debug)
+        if not plan:
+            return "[STOPPED] 无法生成执行计划"
+
+        if debug:
+            print(f"  [PLAN] {len(plan)} 步: {[s['goal'][:40] for s in plan]}")
+
+        results = []
+        for i, step in enumerate(plan):
+            if debug:
+                print(f"  [EXECUTE {i+1}/{len(plan)}] {step['goal'][:60]}")
+
+            sub_prompt = (
+                f"整体任务: {user_input}\n\n"
+                f"执行计划 ({len(plan)} 步):\n" +
+                "\n".join(f"{j+1}. [{step['action']}] {step['goal']}"
+                          for j, step in enumerate(plan)) +
+                f"\n\n当前执行第 {i+1} 步: {step['goal']}\n"
+                f"工具提示: {step.get('tools', '所有可用工具')}\n\n"
+                f"只完成当前这一步，完成后报告结果。"
+            )
+
+            self.memory.add_message(Message(role="user", content=sub_prompt))
+            step_result = self._run_loop(sub_prompt, debug)
+            results.append({"step": i+1, "goal": step["goal"], "result": step_result[:500]})
+
+            if "[STOPPED]" in step_result or "[ERROR]" in step_result:
+                # Step failed — try re-plan remaining steps
+                remaining = plan[i+1:]
+                if remaining and i < len(plan) - 1:
+                    if debug:
+                        print(f"  [REPLAN] 第{i+1}步失败，重新规划剩余步骤...")
+                    new_plan = self._generate_plan(
+                        f"{user_input}\n已完成: {step['goal']} (失败: {step_result[:200]})",
+                        debug,
+                    )
+                    if new_plan:
+                        plan[i+1:] = new_plan
+
+        all_outputs = "\n---\n".join(
+            f"步骤{r['step']}: {r['goal']}\n{r['result']}" for r in results
+        )
+
+        summary_prompt = (
+            f"原始任务: {user_input}\n\n"
+            f"执行结果:\n{all_outputs[:4000]}\n\n"
+            f"请给出最终回答（中文），总结完成情况和关键发现。"
+        )
+        self.memory.add_message(Message(role="user", content=summary_prompt))
+        final = self._run_loop(summary_prompt, debug)
+        return final
+
+    def _generate_plan(self, task: str, debug: bool = False) -> list[dict] | None:
+        """用 LLM 生成结构化执行计划。"""
+        prompt = (
+            "你是一个任务规划专家。将以下任务分解为可执行的步骤列表。\n\n"
+            f"任务: {task}\n\n"
+            "输出 JSON 数组，每个元素包含:\n"
+            '- action: 动作类型 (read/search/edit/verify/shell)\n'
+            '- goal: 这一步要完成什么（中文，一句话）\n'
+            '- tools: 建议使用的工具（可选）\n\n'
+            "规则:\n"
+            "- 每个步骤应该只做一件事\n"
+            "- 信息收集（read/search）必须在修改（edit）之前\n"
+            "- 修改后必须有验证步骤\n"
+            "- 步骤数控制在 3-8 步\n"
+            "- 第一个步骤应该是了解项目结构\n\n"
+            "输出格式: [{\"action\": \"...\", \"goal\": \"...\", \"tools\": \"...\"}, ...]\n"
+            "只输出 JSON 数组，不要有其他文字。"
+        )
+        try:
+            messages = [
+                Message(role="system", content="你是一个任务规划专家。只输出 JSON。"),
+                Message(role="user", content=prompt),
+            ]
+            resp = self.llm.generate(messages, tools=None)
+            text = (resp.content or "").strip()
+            import re
+            m = re.search(r"\[[\s\S]*\]", text)
+            if m:
+                plan = json.loads(m.group())
+                if isinstance(plan, list) and len(plan) > 0:
+                    return plan
+        except Exception as e:
+            if debug:
+                print(f"  [PLAN FAIL] {e}")
+        return None
 
     def _detect_tool_loop(self, tool_calls: list, debug: bool = False) -> bool:
         for tc in tool_calls:
