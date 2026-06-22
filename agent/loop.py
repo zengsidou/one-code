@@ -1174,6 +1174,6 @@ class AgentLoop:
                         yaml.safe_load(f.read())
             except json.JSONDecodeError as e:
                 return {"passed": False, "reason": f"{fpath} JSON 语法错误: {e}"}
-        except Exception as e:
-            return {"passed": False, "reason": f"{fpath} 验证异常: {e}"}
+            except Exception as e:
+                return {"passed": False, "reason": f"{fpath} 验证异常: {e}"}
         return {"passed": True}
