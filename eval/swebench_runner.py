@@ -332,9 +332,13 @@ class SWEBenchRunner:
         passed = 0
         for test_case in fail_to_pass:
             try:
+                # Django uses its own test runner, not pytest
+                if "django" in (instance.get("repo") or ""):
+                    cmd = f"python tests/runtests.py --settings=test_sqlite -v 0 {test_case} 2>&1"
+                else:
+                    cmd = f"python -m pytest {test_case} -x -q --no-header 2>&1"
                 proc = subprocess.run(
-                    f"python -m pytest {test_case} -x -q --no-header 2>&1",
-                    shell=True, capture_output=True, timeout=120,
+                    cmd, shell=True, capture_output=True, timeout=120,
                     cwd=str(repo), encoding="utf-8", errors="replace",
                 )
                 if proc.returncode == 0:
