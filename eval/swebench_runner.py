@@ -40,7 +40,8 @@ AGENT_SYSTEM_PROMPT = (
     "- 只改 1-5 行，保持风格一致\n"
     "## 验证：跑测试\n"
     "- 用 run_shell 跑 pytest\n"
-    "- 通过后输出 [PATCH] 及 unified diff" 
+    "- 通过后必须输出以 [PATCH] 开头的行，然后紧跟 unified diff\n"
+    "- 不要写大段分析说明，直接给 diff"
 )
 
 
@@ -292,13 +293,21 @@ class SWEBenchRunner:
         """Extract unified diff from agent output."""
         m = re.search(r"\[PATCH\](.*?)(?:\[END\]|$)", agent_output, re.DOTALL | re.IGNORECASE)
         if m:
-            return m.group(1).strip()
+            content = m.group(1).strip()
+            if "diff --git" in content:
+                return content
 
-        # Fallback: find diff-style content
-        for pattern in [r"diff --git.*?(?:\n(?!diff |@@ |\+|\-|\s)\w|\Z)", r"--- .*?\n\+{3}.*?\n@@.*?(?:\n[^\n@+-])"]:
-            matches = re.findall(pattern, agent_output, re.DOTALL)
-            if matches:
-                return "\n".join(matches)
+        # Fallback: find ```diff blocks
+        m = re.search(r"```diff\s*\n(.*?)```", agent_output, re.DOTALL)
+        if m:
+            content = m.group(1).strip()
+            if "diff --git" in content:
+                return content
+
+        # Fallback: find any diff-style content
+        m = re.search(r"diff --git.*?(?=\n\n[^\s\+\-@]|\n\[|\Z)", agent_output, re.DOTALL)
+        if m:
+            return m.group(0).strip()
 
         return ""
 
@@ -313,8 +322,10 @@ class SWEBenchRunner:
             return False, f"patch_parse: {e}"
 
         patch_path = repo / "_agent_patch.diff"
+        # Normalize patch for Windows git: forward slashes in diff paths
+        normalized = patch.replace("\\", "/")
         with open(patch_path, "w", encoding="utf-8") as f:
-            f.write(patch)
+            f.write(normalized)
 
         try:
             r = git.Repo(str(repo))
@@ -324,8 +335,9 @@ class SWEBenchRunner:
 
         if instance.get("test_patch"):
             test_patch_path = repo / "_test_patch.diff"
+            tp = (instance["test_patch"] or "").replace("\\", "/")
             with open(test_patch_path, "w", encoding="utf-8") as f:
-                f.write(instance["test_patch"])
+                f.write(tp)
             try:
                 r.git.apply(str(test_patch_path), "--verbose")
             except Exception:
