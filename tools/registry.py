@@ -136,10 +136,12 @@ class ToolRegistry:
                     pass
         return val
 
-    def _intercept_dangerous(self, command: str) -> str | None:
-        for pattern in DANGEROUS_PATTERNS:
-            if re.search(pattern, command, re.IGNORECASE):
-                return f"[BLOCKED] Dangerous pattern detected: {pattern}"
+    def _intercept_dangerous(self, arguments: dict) -> str | None:
+        for val in arguments.values():
+            if isinstance(val, str):
+                for pattern in DANGEROUS_PATTERNS:
+                    if re.search(pattern, val, re.IGNORECASE):
+                        return f"[BLOCKED] Dangerous pattern detected: {pattern}"
         return None
 
     @property
