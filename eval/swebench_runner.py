@@ -332,14 +332,19 @@ class SWEBenchRunner:
         passed = 0
         for test_case in fail_to_pass:
             try:
-                # Django uses its own test runner, not pytest
+                # Django uses Docker + runtests.py (needs full env)
                 if "django" in (instance.get("repo") or ""):
-                    cmd = f"python tests/runtests.py --settings=test_sqlite -v 0 {test_case} 2>&1"
+                    cmd = (
+                        "docker run --rm "
+                        f'-v "{repo.absolute()}:/repo" -w /repo '
+                        "python:3.10-slim bash -c "
+                        f'"pip install -e /repo -q && python tests/runtests.py --settings=test_sqlite -v 0 {test_case}"'
+                    )
                 else:
                     cmd = f"python -m pytest {test_case} -x -q --no-header 2>&1"
                 proc = subprocess.run(
                     cmd, shell=True, capture_output=True, timeout=120,
-                    cwd=str(repo), encoding="utf-8", errors="replace",
+                    encoding="utf-8", errors="replace",
                 )
                 if proc.returncode == 0:
                     passed += 1
@@ -351,54 +356,74 @@ class SWEBenchRunner:
 
     @staticmethod
     def _apply_unified_diff(repo_root: str, diff_text: str):
-        """Apply unified diff by directly modifying files (not git apply)."""
+        """Apply unified diff using Python's built-in approach — 
+        parse hunks and apply line-by-line correctly."""
         import re
-        current_file = None
-        file_content = None
-        file_lines = None
         
-        for section in re.split(r"\ndiff --git ", "\n" + diff_text):
-            if not section.strip():
+        for section in diff_text.strip().split("\ndiff --git "):
+            section = section.strip()
+            if not section:
                 continue
             
-            # Parse: a/path b/path
-            m = re.search(r"a/(.+?)\s+b/(.+?)(?:\n|$)", section)
-            if m:
-                file_path = m.group(1)
-                full_path = os.path.join(repo_root, file_path)
-                if os.path.exists(full_path):
-                    with open(full_path, "r", encoding="utf-8", errors="replace") as f:
-                        file_content = f.read()
-                    file_lines = file_content.split("\n")
-            
-            # Apply hunks
-            hunks = list(re.finditer(r"@@ -(\d+),?(\d*)\s+\+(\d+),?(\d*)\s+@@(.*?)(?=@@|\Z)", section, re.DOTALL))
-            if not hunks or not file_lines or not file_path:
+            # Parse file header: a/path b/path
+            header_match = re.match(r"a/(.+?)\s+b/(.+?)$", section.split("\n")[0] if "\n" in section else section)
+            if not header_match:
+                continue
+            file_path = header_match.group(1)
+            full_path = os.path.join(repo_root, file_path)
+            if not os.path.exists(full_path):
                 continue
             
-            new_lines = list(file_lines)
-            offset = 0
+            with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                original_lines = f.read().split("\n")
+            
+            # Find all hunks
+            hunks = list(re.finditer(
+                r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@\n(.*?)(?=\n@@|\Z)",
+                section, re.DOTALL
+            ))
+            
+            if not hunks:
+                continue
+            
+            # Apply hunks from last to first to avoid line number shifts
             for hunk in reversed(hunks):
                 old_start = int(hunk.group(1)) - 1
                 old_count = int(hunk.group(2)) if hunk.group(2) else 1
-                hunk_text = hunk.group(5)
+                hunk_body = hunk.group(5)
                 
-                idx = old_start
-                removed = 0
-                for line in hunk_text.split("\n"):
-                    line = line.strip("\r")
-                    if line.startswith("-") and idx < len(new_lines):
-                        del new_lines[idx]
-                        removed += 1
-                    elif line.startswith("+"):
-                        new_lines.insert(idx, line[1:])
-                        idx += 1
-                    elif not line.startswith("+"):
-                        idx += 1
+                new_chunk = []
+                old_pos = old_start
+                
+                for line in hunk_body.split("\n"):
+                    if not line:
+                        new_chunk.append("")
+                    elif line.startswith(" "):  # context — keep original line
+                        if old_pos < len(original_lines):
+                            new_chunk.append(original_lines[old_pos])
+                        else:
+                            new_chunk.append(line[1:])
+                        old_pos += 1
+                    elif line.startswith("-"):  # removed — skip, advance old
+                        old_pos += 1
+                    elif line.startswith("+"):  # added — keep new line
+                        new_chunk.append(line[1:])
+                
+                # Count how many old lines this hunk consumed
+                consumed = 0
+                for line in hunk_body.split("\n"):
+                    if line.startswith(" ") or line.startswith("-"):
+                        consumed += 1
+                
+                # Replace the hunk range with new content
+                original_lines = (
+                    original_lines[:old_start] +
+                    new_chunk +
+                    original_lines[old_start + consumed:]
+                )
             
-            full_path = os.path.join(repo_root, file_path)
             with open(full_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(new_lines))
+                f.write("\n".join(original_lines))
 
     def estimate_cost(self, messages: list[Message]) -> float:
         """Estimate API cost from message list."""
