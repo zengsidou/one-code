@@ -3,6 +3,8 @@
 import hashlib
 import json
 import os
+import re
+import shutil
 from typing import Any
 
 from agent.models import Message, AgentState, StepResult
@@ -114,6 +116,7 @@ class AgentLoop:
         enable_orchestrate: bool = False,
         loop_detect_threshold: int = 3,
         plan_first: bool = False,
+        observability=None,
     ):
         if llm is not None:
             self.llm = llm
@@ -135,6 +138,7 @@ class AgentLoop:
         self._loop_detect_threshold = loop_detect_threshold
         self._plan_first = plan_first
         self._current_plan: list[dict] = []
+        self.observability = observability
         self._error_count = 0
         self._max_errors = 5
 
@@ -193,6 +197,10 @@ class AgentLoop:
 
         self.memory.add_message(Message(role="user", content=user_input))
 
+        mode = "plan_execute" if self._plan_first else "react"
+        if self.observability:
+            self.observability.start_run(user_input, mode)
+
         # ━━━ 硬编码搜索触发 ━━━
         search_triggers = ["搜索", "查一下", "查查", "查", "search", "最新",
                           "教程", "文档", "官方", "是什么", "什么是", "介绍一下",
@@ -227,6 +235,17 @@ class AgentLoop:
         if self.enable_evolution:
             self._evolve_after_run(user_input, result)
 
+        if self.observability:
+            failed = "[STOPPED]" in result or "[SOFT-FAIL]" in result or "[LLM error]" in result
+            self.observability.end_run(
+                success=not failed,
+                failure_type=("stopped" if "[STOPPED]" in result else
+                              "soft_fail" if "[SOFT-FAIL]" in result else
+                              "llm_error" if "[LLM error]" in result else ""),
+            )
+            self.observability.record_step(self._last_step_count)
+            self.observability.estimate_tokens(self.memory.short_term.get_messages())
+
         return result
 
     def _run_loop(self, user_input: str, debug: bool = False) -> str:
@@ -253,10 +272,12 @@ class AgentLoop:
                     content=f"[上下文压力 {pressure}/3] 当前上下文 {token_count} tokens。请尽快完成当前任务并给出最终回答，不要再调用非必要工具。"
                 ))
             if pressure >= 3:
-                context.append(Message(
-                    role="system",
-                    content="[上下文即将溢出] 立即停止工具调用，基于已有信息给出最终中文回答。不要调用任何工具。"
-                ))
+                # Level 3 → Context Reset（对标 Anthropic 40% 阈值重启策略）
+                if self.observability:
+                    self.observability.record_step(step, pressure=3)
+                if debug:
+                    print(f"  [CONTEXT RESET] 压力等级 {pressure}，触发上下文重置")
+                context = self._context_reset(user_input, context)
 
             # ━━━ 步数上限软提醒 ━━━
             if step >= self.max_steps - 3:
@@ -286,6 +307,8 @@ class AgentLoop:
 
             if tool_calls:
                 if self._detect_tool_loop(tool_calls, debug):
+                    if self.observability:
+                        self.observability.record_loop_detection()
                     self.memory.add_message(Message(role="assistant", content=response.content or "", reasoning_content=response.reasoning_content))
                     self._step_trace.append(f"Step{step}: LOOP_DETECTED")
                     if self.enable_self_optimize:
@@ -300,7 +323,12 @@ class AgentLoop:
                     tool_msg_content = f"调用工具: {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})"
                     self._step_trace.append(f"Step{step}: call {tc.name}")
                     self.memory.add_message(Message(role="assistant", content=tool_msg_content, tool_calls=[tc], reasoning_content=response.reasoning_content))
+                    if self.observability:
+                        self.observability.trace_tool_start(step, tc.name, tc.arguments)
                     result = self.registry.execute(tc.name, tc.arguments)
+                    is_error = result.startswith("[ERROR]")
+                    if self.observability:
+                        self.observability.trace_tool_end(step, tc.name, result, error=is_error)
                     self.memory.add_message(Message(
                         role="tool", content=result,
                         tool_call_id=tc.id, tool_name=tc.name,
@@ -321,6 +349,8 @@ class AgentLoop:
                                         "circuit_breaker",
                                     )
                                 self._step_trace.append(f"Step{step}: CIRCUIT_BREAKER")
+                                if self.observability:
+                                    self.observability.record_circuit_breaker()
                                 return f"[STOPPED] 连续工具执行错误达到上限 ({self._max_errors})，已熔断。最后错误: {result}"
                 idle_steps = 0
                 continue
@@ -348,13 +378,82 @@ class AgentLoop:
 
     @staticmethod
     def _pressure_level(token_count: int) -> int:
-        """上下文压力等级: 0=正常, 1=关注, 2=警告, 3=紧急"""
+        """上下文压力等级: 0=智能区(<40%), 1=关注(40-60%), 2=警告(60-80%), 3=紧急(>80%)"""
         max_tokens = 65536
         ratio = token_count / max_tokens
-        if ratio > 0.85: return 3
-        if ratio > 0.70: return 2
-        if ratio > 0.50: return 1
+        if ratio > 0.80: return 3
+        if ratio > 0.60: return 2
+        if ratio > 0.40: return 1
         return 0
+
+    def _context_reset(self, current_task: str, context: list) -> list:
+        """Context Reset: 清理上下文窗口，通过结构化交接文档保留关键状态。
+
+        当压力达到 3 级时触发。流程:
+        1. 提取当前任务状态、已完成工作、待办事项
+        2. 清空短期记忆
+        3. 注入精简的交接文档 → 新 Agent 从干净状态继续
+        
+        对标 Anthropic 的 context reset 策略。
+        """
+        msgs = self.memory.short_term.get_messages()
+        if len(msgs) < 6:
+            return context
+
+        tool_results = [m.content for m in msgs if m.role == "tool" and m.content]
+        user_query = next((m.content for m in msgs if m.role == "user" and m.content), current_task)
+
+        handoff = (
+            "[上下文重置] 为保持推理质量，上下文已清空。以下是之前工作的交接文档:\n\n"
+            f"# 当前任务\n{user_query[:500]}\n\n"
+            f"# 最近工具执行结果\n" +
+            "\n".join(r[:200] for r in tool_results[-3:]) +
+            "\n\n"
+            f"# 步骤统计\n已执行约 {self._last_step_count} 步。\n\n"
+            "请基于以上信息继续完成任务。如果需要之前的具体代码，请重新读取相关文件。"
+        )
+
+        self.memory.short_term._messages.clear()
+        return [
+            Message(role="system", content=handoff),
+            Message(role="user", content=current_task),
+        ]
+
+    def _garbage_collect(self, workspace: str | None = None) -> None:
+        """清理 Agent 运行时生成的冗余产物（对标 OpenAI 的后台清理 Agent）。
+
+        清理内容: 临时文件、.pyc 缓存、超过 10 次运行的观测数据。
+        """
+        import glob as _glob
+        ws = workspace or "."
+        patterns = ["*.tmp", "*.bak", "*.py-generated", "__pycache__/**"]
+        removed = 0
+        for pattern in patterns:
+            for f in _glob.glob(f"{ws}/{pattern}", recursive=True):
+                try:
+                    if os.path.isfile(f):
+                        os.remove(f)
+                        removed += 1
+                    elif os.path.isdir(f):
+                        shutil.rmtree(f, ignore_errors=True)
+                        removed += 1
+                except Exception:
+                    pass
+
+        if self.observability:
+            history = self.observability.load_history()
+            if len(history) > 10:
+                # Keep only last 10
+                for old in history[:-10]:
+                    path = self.observability.save_dir / f"{old.get('run_id', 'old')}.json"
+                    if path.exists():
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
+
+        if removed and self.observability:
+            print(f"  [GC] 清理了 {removed} 个冗余文件")
 
     def _build_system_prompt(self) -> str:
         if not hasattr(self, "_cached_tool_desc"):
