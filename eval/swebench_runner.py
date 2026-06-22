@@ -330,7 +330,8 @@ class SWEBenchRunner:
         # Try git apply (more lenient than PatchSet parser)
         try:
             r = git.Repo(str(repo))
-            r.git.apply(str(patch_path), "--verbose")
+            patch_abs = str(patch_path.absolute()).replace("\\", "/")
+            r.git.apply(patch_abs, "--verbose")
         except Exception as e:
             return False, f"apply: {str(e)[:150]}"
 
@@ -340,7 +341,8 @@ class SWEBenchRunner:
             with open(test_patch_path, "w", encoding="utf-8") as f:
                 f.write(tp)
             try:
-                r.git.apply(str(test_patch_path), "--verbose")
+                test_abs = str(test_patch_path.absolute()).replace("\\", "/")
+                r.git.apply(test_abs, "--verbose")
             except Exception:
                 pass
 
