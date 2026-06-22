@@ -72,7 +72,12 @@ micro-agent/
 - **可观测性**: 指标/token追踪/工具耗时/控制台报告
 - **Token 优化**: prompt 缓存/输出压缩/compact/flash 模型降级
 
-## 快速开始
+## 集成 & 对标
+
+- **OpenHands/OpenClaw**: Agent 框架对标，支持类似的代码修复 + 多 Agent 协作模式
+- **MCP Protocol**: stdio/SSE 双传输，工具可暴露为标准化 MCP 接口
+- **SWE-bench Lite**: 自动化评测框架，支持 Agentless 3 阶段策略
+- **DeepSeek V4 Pro**: 原生 Function Calling，支持 reasoning_content 回传
 
 ```bash
 # 依赖

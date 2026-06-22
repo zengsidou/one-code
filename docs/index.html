@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Micro-Agent Framework</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,sans-serif;background:#0d1117;color:#c9d1d9;line-height:1.6}
+.hero{text-align:center;padding:60px 20px 40px;background:linear-gradient(180deg,#161b22,#0d1117)}
+.hero h1{font-size:2.5em;color:#58a6ff;margin-bottom:10px}
+.hero p{color:#8b949e;font-size:1.2em;max-width:600px;margin:0 auto}
+.container{max-width:1000px;margin:0 auto;padding:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;margin:30px 0}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:24px}
+.card h3{color:#58a6ff;margin-bottom:12px}
+.card p{color:#8b949e;font-size:0.95em}
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:0.8em;margin:4px}
+.badge-pass{background:#1a3a2a;color:#3fb950}
+.badge-info{background:#1a2a3a;color:#58a6ff}
+.metric{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #21262d}
+.metric:last-child{border:none}
+.value{color:#58a6ff;font-weight:600}
+.footer{text-align:center;padding:30px;color:#484f58;font-size:0.85em}
+a{color:#58a6ff;text-decoration:none}
+</style>
+</head>
+<body>
+
+<div class="hero">
+<h1>Micro-Agent Framework</h1>
+<p>从零实现的 AI Agent 框架  /  L0-L4 自进化  /  Harness Engineering 六层架构  /  10/10 快速评测满分</p>
+</div>
+
+<div class="container">
+
+<div class="grid">
+<div class="card">
+<h3>快速评测</h3>
+<div class="metric"><span>Bug Fix</span><span class="value badge-pass">10/10 100%</span></div>
+<div class="metric"><span>平均耗时</span><span class="value">15s/实例</span></div>
+<div class="metric"><span>平均步数</span><span class="value">4.1 steps</span></div>
+<div class="metric"><span>多文件</span><span class="value badge-info">支持</span></div>
+</div>
+
+<div class="card">
+<h3>Agent 架构</h3>
+<div class="metric"><span>执行模式</span><span class="value">ReAct / Plan-then-Execute</span></div>
+<div class="metric"><span>自进化</span><span class="value badge-pass">L0-L4</span></div>
+<div class="metric"><span>专业化</span><span class="value">Coder/Reviewer/Tester/Doc</span></div>
+<div class="metric"><span>上下文</span><span class="value">64K + 40% Reset</span></div>
+</div>
+
+<div class="card">
+<h3>企业能力</h3>
+<div class="metric"><span>权限控制</span><span class="value badge-pass">工具级 ACL</span></div>
+<div class="metric"><span>审计日志</span><span class="value badge-info">JSONL</span></div>
+<div class="metric"><span>可观测性</span><span class="value">Metrics + Tracing</span></div>
+<div class="metric"><span>Token 优化</span><span class="value badge-pass">缓存+压缩</span></div>
+</div>
+
+<div class="card">
+<h3>Harness Engineering</h3>
+<div class="metric"><span>L1 信息边界</span><span class="value">AGENTS.md</span></div>
+<div class="metric"><span>L2 工具系统</span><span class="value">注册+Schema</span></div>
+<div class="metric"><span>L3 执行编排</span><span class="value">Plan-then-Execute</span></div>
+<div class="metric"><span>L4 记忆状态</span><span class="value">64K+CM</span></div>
+<div class="metric"><span>L5 评估观测</span><span class="value badge-pass">独立评估器</span></div>
+<div class="metric"><span>L6 约束恢复</span><span class="value">熔断+回路检测</span></div>
+</div>
+</div>
+
+<div class="card" style="margin:20px 0">
+<h3>技术栈 &amp; 对标</h3>
+<p>
+  <span class="badge badge-info">DeepSeek V4 Pro</span>
+  <span class="badge badge-info">Python 3.14</span>
+  <span class="badge badge-info">ChromaDB</span>
+  <span class="badge badge-info">MCP Protocol</span>
+  <span class="badge badge-info">Flask IDE</span>
+  <span class="badge badge-info">SWE-bench Lite</span>
+</p>
+<p style="margin-top:12px">
+  参考架构: OpenAI 3人团队 / Anthropic 3-Agent / Stripe Minions / Hashimoto AGENTS.md / OpenHands
+</p>
+</div>
+
+</div>
+
+<div class="footer">
+  <p>Micro-Agent Framework · Apache-2.0 · 
+  <a href="https://gitee.com/oneonichan/micro-agent">Gitee</a> · 
+  <a href="https://github.com/zengsidou/micro-agent">GitHub</a></p>
+  <p>对标 AI 研发效能工程师 (AIDP) · 杭州 · 30-60K·15薪</p>
+</div>
+
+</body>
+</html>

@@ -80,7 +80,41 @@ BUGGY_FIXTURES = [
         "code": "import matthlib  # should be math\nprint(matthlib.sqrt(16))",
         "expected": "runs without error",
     },
+    # ━━ 难度 2: 逻辑 bug ━━
+    # 11: 排序逻辑错误
+    {
+        "desc": "修复排序逻辑：冒泡排序内循环范围错误",
+        "code": "def bubble(arr):\n    n = len(arr)\n    for i in range(n):\n        for j in range(n-1):  # should be n-i-1\n            if arr[j] > arr[j+1]:\n                arr[j], arr[j+1] = arr[j+1], arr[j]\n    return arr\n\nprint(bubble([5,3,8,1]))",
+        "expected": "输出 [1,3,5,8]",
+    },
+    # 12: 递归缺终止条件
+    {
+        "desc": "修复递归无限循环：缺少终止条件",
+        "code": "def countdown(n):\n    print(n)\n    countdown(n-1)  # no base case\n\ncountdown(5)",
+        "expected": "runs without error (adds base case)",
+    },
+    # ━━ 多文件场景 ━━
+    # 13: 跨文件 import bug (2 files)
+    {
+        "desc": "2文件: 修复 import 路径错误",
+        "code": "import sys, os\n\n# File: utils.py\nopen('utils.py','w').write('def add(a,b): return a+b')\n# File: main.py (BUG: typo 'util' not 'utils')\nopen('main.py','w').write('from util import add  # typo\\nprint(add(3,4))')\n\nimport subprocess\nr = subprocess.run([sys.executable,'main.py'], capture_output=True)\nprint(r.stderr.decode())",
+        "expected": "runs without error",
+    },
+    # 14: 2文件: 函数签名不匹配
+    {
+        "desc": "2文件: lib.py 函数改名但 caller 未更新",
+        "code": "open('lib.py','w').write('def multiply(x, y): return x * y')\nopen('app.py','w').write('import lib\\nprint(lib.multiplay(3,4))  # typo in caller')\n\nimport subprocess, sys\nr = subprocess.run([sys.executable,'app.py'], capture_output=True)\nprint(r.stderr.decode())",
+        "expected": "runs without error",
+    },
+    # 15: 3文件: 跨模块字段名变更
+    {
+        "desc": "3文件: config 字段改名但 reader 未更新",
+        "code": "open('config.py','w').write(\"HOST = 'localhost'\\nPORT = 8080\")\nopen('reader.py','w').write('import config\\nprint(config.host)  # should be config.HOST')\n\nimport subprocess, sys\nr = subprocess.run([sys.executable,'reader.py'], capture_output=True)\nprint(r.stderr.decode())",
+        "expected": "runs without error",
+    },
 ]
+
+MULTI_FILE_FIXTURES = BUGGY_FIXTURES[12:]  # indices 12, 13, 14
 
 
 @dataclass
