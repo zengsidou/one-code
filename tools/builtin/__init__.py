@@ -71,6 +71,10 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
     @registry.register("glob", "按 glob 模式匹配文件，如 '**/*.py' 或 '*.json'")
     def glob_files(pattern: str, path: str = ".") -> str:
         from pathlib import Path
+        if not isinstance(pattern, str):
+            return f"[ERROR] glob 参数错误: pattern 应为字符串，实际为 {type(pattern).__name__}"
+        if not isinstance(path, str):
+            return f"[ERROR] glob 参数错误: path 应为字符串，实际为 {type(path).__name__}"
         try:
             matches = sorted(Path(path).rglob(pattern))
             if not matches:
