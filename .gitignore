@@ -26,4 +26,7 @@ eval/results/
 AGENTS.md
 ci/reports/
 ci/latest.json
+challenge_*.py
+session_state.json
+user_profile.json
 
