@@ -112,6 +112,7 @@ class AgentLoop:
         skill_library_file: str = "./skill_library.json",
         ability_profile_file: str = "./ability_profile.json",
         enable_orchestrate: bool = False,
+        loop_detect_threshold: int = 3,
     ):
         if llm is not None:
             self.llm = llm
@@ -130,6 +131,7 @@ class AgentLoop:
         self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self.max_steps = max_steps
         self._tool_fingerprints: list[str] = []
+        self._loop_detect_threshold = loop_detect_threshold
         self._error_count = 0
         self._max_errors = 5
 
@@ -374,9 +376,9 @@ class AgentLoop:
             self._tool_fingerprints.append(fp)
             if debug:
                 print(f"  [DEBUG detect] tool={tc.name} args={tc.arguments} fp={fp[:12]}")
-            # 滑动窗口：只看最近8次调用，同一指纹出现3次才触发
-            window = self._tool_fingerprints[-8:]
-            if window.count(fp) >= 3:
+            # 滑动窗口：同一指纹出现次数达到阈值才触发
+            window = self._tool_fingerprints[-max(8, self._loop_detect_threshold * 2):]
+            if window.count(fp) >= self._loop_detect_threshold:
                 return True
         return False
 

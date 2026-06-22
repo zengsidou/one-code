@@ -204,6 +204,7 @@ class SWEBenchRunner:
             max_steps=self.max_steps,
             enable_self_optimize=False,
             enable_evolution=False,
+            loop_detect_threshold=6,
         )
         agent.system_prompt = AGENT_SYSTEM_PROMPT
         return agent
