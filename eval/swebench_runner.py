@@ -30,17 +30,34 @@ from agent.models import Message
 
 AGENT_SYSTEM_PROMPT = (
     DEFAULT_SYSTEM_PROMPT
-    + "\n\n=== SWE-BENCH EVALUATION MODE ===\n"
-    "你正在参与 SWE-bench 评测。你会收到一个 GitHub issue 描述。\n"
-    "任务流程：\n"
-    "1. 先用 list_dir 查看项目根目录结构\n"
-    "2. 用 grep 搜索 issue 中提到的关键词来定位相关文件\n"
-    "3. 用 read_file 仔细阅读相关代码\n"
-    "4. 定位 bug 后用 write_file 写入修复\n"
-    "5. 最后用 run_shell 跑测试验证修复\n"
-    "6. 修复完成后输出 [PATCH] 开头的 unified diff\n\n"
-    "重要：每一步只做一件事，不要同时调用多个工具。"
-    "如果文件太大(>8000字符)，尝试搜索更具体的关键词缩小范围。"
+    + "\n\n=== SWE-BENCH EVALUATION MODE (Agentless 3-Phase Strategy) ===\n"
+    "你正在参与 SWE-bench 代码修复评测。按三阶段严格执行：\n\n"
+    "## 阶段 1: 定位（Localize）— 不要急着修改\n"
+    "1. 用 list_dir 查看项目顶层结构\n"
+    "2. 用 grep 搜索 issue 中的关键词（函数名、类名、错误信息片段）\n"
+    "3. 用 read_file 阅读候选文件的相关区域（不是整个文件）\n"
+    "4. 确认找到了 bug 位置后再进入阶段 2\n\n"
+    "## 阶段 2: 修复（Repair）— 最小变更\n"
+    "5. 只修改必要的几行代码\n"
+    "6. 用 write_file 写入修复后的完整文件\n"
+    "7. 修复原则：最小变更、不改无关代码、不加注释\n\n"
+    "## 阶段 3: 验证（Validate）— 跑测试\n"
+    "8. 用 run_shell 运行相关的测试\n"
+    "9. 如果测试失败：读错误输出 → 回到阶段 1 重新定位 → 修正\n"
+    "10. 测试通过后，输出 [PATCH] 开头的 unified diff\n\n"
+    "## 关键规则\n"
+    "- SWE-bench 的修复通常只有 1-5 行，不要大改\n"
+    "- 如果 3 次尝试都无法定位，尝试搜索 issue 描述中的代码片段\n"
+    "- 测试命令格式：python -m pytest tests/path/test_file.py::test_name -x\n"
+    "- 输出 unified diff 格式：\n"
+    "```diff\n"
+    "diff --git a/path/to/file b/path/to/file\n"
+    "--- a/path/to/file\n"
+    "+++ b/path/to/file\n"
+    "@@ -line,count +line,count @@\n"
+    "- old code\n"
+    "+ new code\n"
+    "```"
 )
 
 
@@ -183,7 +200,7 @@ class SWEBenchRunner:
             print(f"  Clone failed: {e}")
             return None
 
-    def build_agent(self, workspace: Path) -> AgentLoop:
+    def build_agent(self, workspace: Path, plan_first: bool = False) -> AgentLoop:
         """Build micro-agent with workspace-aware tools."""
         registry = ToolRegistry(safe_mode=False)
         register_builtin_tools(registry)
@@ -205,6 +222,7 @@ class SWEBenchRunner:
             enable_self_optimize=False,
             enable_evolution=False,
             loop_detect_threshold=6,
+            plan_first=plan_first,
         )
         agent.system_prompt = AGENT_SYSTEM_PROMPT
         return agent
@@ -367,11 +385,23 @@ class SWEBenchRunner:
             return result
 
         agent = self.build_agent(repo_dir)
-        task = (
-            f"GitHub Issue:\n{instance['problem_statement']}\n\n"
-            f"Repository: {instance['repo']} at commit {instance['base_commit']}\n"
-            f"请修复这个 issue 并输出 [PATCH] 开头的 unified diff。"
-        )
+
+        # ━━━ 构建结构化任务提示 ━━━
+        fail_to_pass = json.loads(instance.get("FAIL_TO_PASS", "[]"))
+        hints = instance.get("hints_text", "")
+        task_parts = [
+            f"## GitHub Issue\n{instance['problem_statement']}",
+            f"## Repository\n{instance['repo']} (commit {instance['base_commit'][:8]})",
+        ]
+        if hints:
+            task_parts.append(f"## 提示\n{hints}")
+        if fail_to_pass:
+            task_parts.append(
+                f"## 验证目标\n修复后以下测试必须通过:\n" +
+                "\n".join(f"- {t}" for t in fail_to_pass[:5])
+            )
+        task_parts.append("\n## 要求\n请修复这个 issue。先定位问题代码，再做最小修改，最后运行测试验证。完成后输出 [PATCH] 及 unified diff。")
+        task = "\n\n".join(task_parts)
 
         start = time.time()
         try:
@@ -387,6 +417,30 @@ class SWEBenchRunner:
 
             result.resolved = self.apply_and_test(instance, result.generated_patch, repo_dir)
             print(f"  Resolved: {result.resolved}")
+
+            # ━━━ 自动重试：首次失败时切换策略 ━━━
+            if not result.resolved and not result.error and result.generated_patch:
+                print(f"  [RETRY] 首次失败，尝试 Plan-then-Execute 模式...")
+                retry_agent = self.build_agent(repo_dir, plan_first=True)
+                retry_task = (
+                    task + "\n\n[重试提示] 上次尝试未能通过测试。请重新规划步骤，"
+                    "特别关注: 1) 是否修改了正确的文件？ 2) 测试命令是否正确？"
+                    "3) 是否需要在跑测试前安装依赖？"
+                )
+                try:
+                    retry_output = retry_agent.run(retry_task)
+                    retry_patch = self.extract_patch(retry_output)
+                    if retry_patch:
+                        print(f"  Retry patch: {len(retry_patch)} bytes")
+                        retry_resolved = self.apply_and_test(instance, retry_patch, repo_dir)
+                        if retry_resolved:
+                            result.resolved = True
+                            result.generated_patch = retry_patch
+                            print(f"  [RETRY] 第二次尝试成功!")
+                    retry_elapsed = time.time() - start - result.elapsed_sec
+                    result.elapsed_sec += retry_elapsed
+                except Exception:
+                    pass
         except Exception as e:
             result.elapsed_sec = time.time() - start
             result.error = f"{type(e).__name__}: {e}"
