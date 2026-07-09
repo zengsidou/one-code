@@ -52,14 +52,13 @@ body{font:var(--fs)/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);col
 /* input */
 .input-bar{
   padding:calc(var(--fs)*0.7) calc(var(--fs)*1.2);background:var(--bg2);border-top:1px solid var(--border);
-  display:flex;gap:calc(var(--fs)*0.5);flex-shrink:0;
+  display:flex;gap:calc(var(--fs)*0.5);flex-shrink:0;position:relative;
 }
 .input-bar input{
   flex:1;padding:calc(var(--fs)*0.6) calc(var(--fs)*1);background:var(--bg);color:var(--fg);
   border:1px solid var(--border);border-radius:var(--radius);font-size:calc(var(--fs)*1.15);outline:none;
 }
 .input-bar input:focus{border-color:var(--accent)}
-.input-bar input{position:relative;z-index:101}
 .input-bar button{
   padding:calc(var(--fs)*0.6) calc(var(--fs)*1.5);background:var(--accent);color:#fff;border:none;
   border-radius:var(--radius);cursor:pointer;font-size:calc(var(--fs)*1);font-weight:600;
