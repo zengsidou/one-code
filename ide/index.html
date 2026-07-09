@@ -58,6 +58,13 @@ body{font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:va
   border:1px solid var(--border);border-radius:var(--radius);font-size:13px;outline:none;
 }
 .input-bar input:focus{border-color:var(--accent)}
+.input-bar input{position:relative;z-index:101}
+.mode-btn{padding:2px 8px;border:1px solid var(--border);border-radius:10px;background:transparent;color:var(--fg2);cursor:pointer;font-size:11px;transition:all .2s}
+.mode-btn:hover{border-color:var(--accent);color:var(--fg)}
+.mode-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+#suggestBox div{padding:6px 12px;cursor:pointer;font-size:12px;color:var(--fg);border-bottom:1px solid var(--border)}
+#suggestBox div:hover{background:var(--bg3)}
+#suggestBox div:last-child{border-bottom:none}
 .input-bar button{
   padding:8px 16px;background:var(--accent);color:#fff;border:none;
   border-radius:var(--radius);cursor:pointer;font-size:13px;font-weight:600;
@@ -90,14 +97,21 @@ body{font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:va
 <div class="main">
   <div class="header">
     <span class="title">One-Code IDE</span>
-    <span class="status idle" id="statusBadge">就绪</span>
+    <span style="font-size:11px;color:var(--fg2)">
+      <button class="mode-btn active" id="modeBuild" onclick="setMode('build')" style="margin-right:4px">Build</button>
+      <button class="mode-btn" id="modePlan" onclick="setMode('plan')">Plan</button>
+      <button class="mode-btn" id="modeCompose" onclick="setMode('compose')">Compose</button>
+      &nbsp;|&nbsp; <span id="modelName" style="color:var(--accent)">deepseek-v4-pro</span>
+      &nbsp; <span id="statusBadge" class="status idle">就绪</span>
+    </span>
   </div>
   <div class="chat" id="chatBox">
     <div class="msg system">One-Code IDE 已就绪。输入编程任务开始。</div>
   </div>
-  <div class="input-bar">
-    <input type="text" id="userInput" placeholder="描述你的编程任务... (Shift+Enter 换行, Enter 发送)" onkeydown="handleKey(event)">
+  <div class="input-bar" style="position:relative">
+    <input type="text" id="userInput" placeholder="输入编程任务... (Enter 发送)" onkeydown="handleKey(event)" oninput="showSuggest(event)" autocomplete="off">
     <button id="sendBtn" onclick="send()">发送</button>
+    <div id="suggestBox" style="display:none;position:absolute;bottom:100%;left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);max-height:160px;overflow-y:auto;z-index:100"></div>
   </div>
 </div>
 <div class="stats" id="statsPanel">
@@ -107,10 +121,11 @@ body{font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:va
   <div class="stat-row"><span class="stat-label">成功率</span><span class="stat-val" id="successRate">-</span></div>
   <div class="stat-row"><span class="stat-label">技能</span><span class="stat-val" id="skillCount">-</span></div>
   <hr>
-  <h3>当前任务</h3>
+  <h3>当前会话</h3>
   <div class="stat-row"><span class="stat-label">步骤</span><span class="stat-val" id="stepsVal">-</span></div>
   <div class="stat-row"><span class="stat-label">Token</span><span class="stat-val" id="tokenVal">-</span></div>
-  <hr>
+  <div class="stat-row"><span class="stat-label">费用</span><span class="stat-val" id="costVal">-</span></div>
+  <div class="stat-row"><span class="stat-label">模型</span><span class="stat-val" id="modelVal">-</span></div>
   <button onclick="clearMemory()" style="width:100%;padding:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:4px;cursor:pointer;margin-bottom:4px">清空记忆</button>
   <button onclick="grow()" style="width:100%;padding:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:4px;cursor:pointer">生成挑战</button>
 </div>
@@ -239,6 +254,44 @@ async function updateTools(){
     document.getElementById('toolList').innerHTML=(data.tools||[]).map(function(t){return '<div class="item file">'+esc(t)+'</div>'}).join('');
   }catch(e){}
 }
+
+// === suggestions ===
+var suggestCache=[];
+async function fetchSuggestions(){
+  try{var r=await fetch('/api/suggest?q=');var d=await r.json();suggestCache=d.suggestions||[]}catch(e){}
+}
+function showSuggest(e){
+  var q=e.target.value.toLowerCase();
+  if(!q){document.getElementById('suggestBox').style.display='none';return}
+  var matches=q?suggestCache.filter(function(s){return s.toLowerCase().includes(q)}).slice(0,5):suggestCache.slice(0,5);
+  if(!matches.length){document.getElementById('suggestBox').style.display='none';return}
+  var box=document.getElementById('suggestBox');
+  box.innerHTML=matches.map(function(m){return '<div onclick="pickSuggest(\''+esc(m)+'\')">'+esc(m)+'</div>'}).join('');
+  box.style.display='block';
+}
+function pickSuggest(text){
+  document.getElementById('userInput').value=text;
+  document.getElementById('suggestBox').style.display='none';
+  send();
+}
+// === mode switching ===
+var currentMode='build';
+function setMode(mode){
+  fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode})});
+  document.querySelectorAll('.mode-btn').forEach(function(b){b.classList.remove('active')});
+  document.getElementById('mode'+mode.charAt(0).toUpperCase()+mode.slice(1)).classList.add('active');
+  currentMode=mode;
+  document.getElementById('modelVal').textContent=mode==='plan'?'read-only':'full';
+}
+// === token/cost polling ===
+setInterval(function(){
+  fetch('/api/usage').then(function(r){return r.json()}).then(function(d){
+    document.getElementById('tokenVal').textContent=d.tokens||0;
+    document.getElementById('costVal').textContent='$'+((d.cost||0).toFixed(4));
+  }).catch(function(){});
+},3000);
+
+fetchSuggestions();
 start();
 </script>
 </body>

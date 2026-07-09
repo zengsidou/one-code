@@ -186,6 +186,45 @@ def clear():
     return jsonify({"ok": True})
 
 
+@app.route("/api/usage", methods=["GET"])
+def usage():
+    agent = get_agent()
+    try:
+        tokens = agent.memory.short_term.get_token_count()
+        # DeepSeek V4 pricing: $0.137/M input, $0.274/M output (est 50/50 split)
+        cost_input = (tokens / 1_000_000) * 0.137
+        cost_output = (tokens / 1_000_000) * 0.274
+        cost = round((cost_input + cost_output) / 2, 6)
+    except Exception:
+        tokens, cost = 0, 0
+    return jsonify({"tokens": tokens, "cost": cost, "max_tokens": agent.memory.short_term.max_tokens})
+
+
+@app.route("/api/mode", methods=["POST"])
+def set_mode():
+    agent = get_agent()
+    data = request.get_json()
+    mode = data.get("mode", "build")
+    if mode in ("build", "plan", "compose"):
+        agent.mode = mode
+        return jsonify({"mode": mode, "ok": True})
+    return jsonify({"error": f"Invalid mode: {mode}"}), 400
+
+
+@app.route("/api/suggest", methods=["GET"])
+def suggest():
+    q = request.args.get("q", "").lower()
+    tasks = [
+        "修复 bug", "重构代码", "写单元测试",
+        "添加新功能", "优化性能", "分析代码",
+        "搜索文档", "配置环境", "写 API",
+        "做网页", "写脚本", "解释代码",
+        "写 README", "合并代码", "创建组件",
+    ]
+    matches = [t for t in tasks if q in t.lower()][:5] if q else tasks[:5]
+    return jsonify({"suggestions": matches})
+
+
 def _learn_from_exchange(user_input: str, agent_response: str):
     global _boot_context
     if not user_input or not agent_response or len(agent_response) < 10:

@@ -1,128 +1,47 @@
 # -*- coding: utf-8 -*-
-"""
-OneCode Framework
-  Agent Loop  — ReAct 循环 + 熔断 + 回路检测
-  Tool Use    — 装饰器注册 + 自动 Schema 生成
-  Memory      — 64K 智能上下文窗口 + ChromaDB 长期记忆
-  LLM Adapter — DeepSeek API / Ollama 本地调用
-  Evolution   — 复盘反思 + 技能库 + 能力画像 + 五层自我改进链
-"""
-import sys, os
-
+"""One-Code CLI — 简单的 coding 助手"""
+import sys, os, time
 from tools.registry import ToolRegistry
 from tools.builtin import register_builtin_tools
-from tools.plugins import load_plugin_tools
 from memory.short_term import ShortTermMemory
 from memory.long_term import LongTermMemory
 from memory import MemoryManager
-from agent.loop import AgentLoop
-from agent.checkpoint import AgentCheckpoint
-from agent.models import Message
-from sandbox import SandboxPolicy, SafeExecutor
 
-
-class Colors:
-    RESET = "\033[0m"
-    CYAN = "\033[96m"; YELLOW = "\033[93m"; GREEN = "\033[92m"
-    RED = "\033[91m"; BLUE = "\033[94m"; MAGENTA = "\033[95m"
-
+class C:
+    R="\033[91m";G="\033[92m";Y="\033[93m";B="\033[94m";C="\033[96m";M="\033[95m";W="\033[0m"
     @staticmethod
-    def enable():
-        if os.name == "nt": os.system("")
-
-    @staticmethod
-    def c(text: str, color: str) -> str:
-        return f"{color}{text}{Colors.RESET}"
-
+    def p(text, color): return f"{color}{text}{C.W}"
 
 def main():
-    Colors.enable()
+    if os.name=="nt": os.system("")
 
-    # Choose LLM backend
-    if os.environ.get("DEEPSEEK_API_KEY"):
-        llm_type = "deepseek"
-        from llm.deepseek_api import DeepSeekAdapter
-        llm = DeepSeekAdapter()
-        model_name = "deepseek-v4-pro"
-    elif os.environ.get("OPENAI_API_KEY"):
-        llm_type = "openai"
-        from llm.openai_api import OpenAIAdapter
-        llm = OpenAIAdapter()
-        model_name = llm.model
-    elif os.environ.get("GEMINI_API_KEY"):
-        llm_type = "gemini"
-        from llm.gemini_api import GeminiAdapter
-        llm = GeminiAdapter()
-        model_name = llm.model
-    else:
-        from llm.ollama import OllamaClient
-        try:
-            llm = OllamaClient(model="deepseek-r1:8b")
-            model_name = llm.model
-            llm_type = "ollama"
-        except Exception:
-            print(Colors.c("未配置 API Key 且 Ollama 不可用。请设置:", Colors.RED))
-            print(Colors.c("  DEEPSEEK_API_KEY 或 OPENAI_API_KEY 或 GEMINI_API_KEY", Colors.RED))
-            print(Colors.c("  或启动 Ollama 服务", Colors.RED))
-            return
+    key = os.environ.get("DEEPSEEK_API_KEY","")
+    if not key: return print(C.p("请设置 DEEPSEEK_API_KEY","R"))
 
-    use_contract = "--contract" in sys.argv or "-c" in sys.argv
-    use_stream = "--stream" in sys.argv or "-s" in sys.argv
-    verbose = False  # /debug 切换详细模式
+    from llm.deepseek_api import DeepSeekAdapter
+    llm = DeepSeekAdapter(api_key=key)
+    reg = ToolRegistry(safe_mode=False)
+    register_builtin_tools(reg, llm=llm)
+    mem = MemoryManager(short=ShortTermMemory(), long=LongTermMemory(llm))
+    from agent.loop import AgentLoop
+    agent = AgentLoop(llm=llm, registry=reg, memory=mem, max_steps=20)
 
-    print(Colors.c("=" * 60, Colors.CYAN))
-    print(Colors.c("  One-Code Framework", Colors.CYAN))
-    print(Colors.c("  Agent Loop + Tool Use + Contract-First", Colors.CYAN))
-    print(Colors.c("=" * 60, Colors.CYAN))
-    print(f"  LLM:       {Colors.c(model_name, Colors.BLUE)}")
-    print(f"  Context:   {Colors.c(f'{short_mem.max_tokens//1024}K tokens', Colors.BLUE)}")
-    print(f"  Tools:     {Colors.c(str(len(registry.tool_names)), Colors.GREEN)}")
-    print(f"  Contract:  {Colors.c('ON' if use_contract else 'OFF', Colors.MAGENTA)}")
-    print(Colors.c("-" * 60, Colors.CYAN))
-    print(f"  /exit     /tools   /memory   /clear   /debug   /stream")
-    print(Colors.c("-" * 60, Colors.CYAN))
-    print(f"  /exit     /tools   /memory   /clear{'  /stream' if not use_stream else ''}")
-    print(Colors.c("-" * 60, Colors.CYAN))
-    print()
+    print(C.p("One-Code ready. Type a task, Enter to send. Ctrl+C to quit.", "C"))
+    print(f"  {C.p(str(len(reg.tool_names)),'G')} tools  {C.p(llm.model,'B')}\n")
 
     while True:
         try:
-            raw = input(Colors.c(">>> ", Colors.GREEN)).strip()
-        except (EOFError, KeyboardInterrupt):
-            print(f"\n{Colors.c('再见!', Colors.YELLOW)}"); break
-
+            raw = input(C.p("> ","G")).strip()
+        except (EOFError,KeyboardInterrupt):
+            break
         if not raw: continue
 
-        if raw.startswith("/"):
-            cmd = raw.lower()
-            if cmd in ("/exit", "/quit"):
-                print(f"{Colors.c('再见!', Colors.YELLOW)}"); break
-            elif cmd == "/tools":
-                print(f"\n{Colors.c('可用工具:', Colors.BLUE)}")
-                print(registry.get_tools_description()); print()
-            elif cmd == "/memory":
-                msgs = short_mem.get_messages()
-                print(f"\n{Colors.c(f'短期记忆 ({len(msgs)} 条, {short_mem.get_token_count()} tokens):', Colors.BLUE)}")
-                for m in msgs[-10:]:
-                    role = Colors.c(f"[{m.role}]", Colors.MAGENTA)
-                    print(f"  {role} {(m.content or '')[:120]}")
-                print()
-            elif cmd == "/clear":
-                memory.clear(); print(f"{Colors.c('记忆已清空', Colors.GREEN)}\n")
-            elif cmd == "/stream":
-                use_stream = not use_stream; print(f"{Colors.c('流式输出: ' + ('ON' if use_stream else 'OFF'), Colors.MAGENTA)}\n")
-            elif cmd == "/debug":
-                verbose = not verbose; print(f"{Colors.c('详细模式: ' + ('ON' if verbose else 'OFF'), Colors.MAGENTA)}\n")
-            else:
-                print(f"{Colors.c('未知命令', Colors.RED)}: {cmd}\n")
-            continue
+        print(C.p(f"  ...thinking...\n","Y"), end="", flush=True)
 
-        if verbose:
-            print()
-        response = agent.run(raw, debug=verbose)
-        print(f"{Colors.c(response, Colors.CYAN)}")
-        print()
+        # Run with debug to show steps
+        result = agent.run(raw, debug=False)
+        result = result.replace("[STOPPED]","").strip()
+        print(C.p(result,"W"))
+        print(C.p("-"*50,"B"))
 
-
-if __name__ == "__main__":
-    main()
+if __name__=="__main__": main()

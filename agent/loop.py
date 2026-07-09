@@ -44,6 +44,9 @@ DEFAULT_SYSTEM_PROMPT = (
 
 
 class AgentLoop:
+    MODE_BUILD = "build"
+    MODE_PLAN = "plan"
+
     def __init__(
         self,
         llm: BaseLLM | None = None,
@@ -111,6 +114,15 @@ class AgentLoop:
         self._contract_orchestrator = ContractFirstOrchestrator(self.llm) if enable_contract_first else None
         self._step_trace: list[str] = []
         self._last_step_count = 0
+        self.mode = self.MODE_BUILD
+        self._plan_schemas = [s for s in self.registry.get_schemas()
+                              if s.get("function", {}).get("name", "") in
+                              ("read_file", "grep", "glob", "list_dir", "lsp", "calculate")]
+
+    def get_active_schemas(self):
+        if self.mode == self.MODE_PLAN:
+            return self._plan_schemas
+        return self.registry.get_schemas()
 
     def run(self, user_input: str, debug: bool = False, boot_context: list[Message] | None = None) -> str:
         if AgentCheckpoint.has_restart_flag():
@@ -236,7 +248,7 @@ class AgentLoop:
                     ),
                 ))
 
-            response = self.llm.generate(context, tools=self.registry.get_schemas())
+            response = self.llm.generate(context, tools=self.get_active_schemas())
             tool_calls = response.tool_calls or []
 
             if tool_calls:
