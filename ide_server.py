@@ -84,7 +84,6 @@ def chat():
         return jsonify({"error": "Empty message"}), 400
 
     agent = get_agent()
-    agent.memory.clear()
 
     for msg in _build_context():
         agent.memory.add_message(msg)

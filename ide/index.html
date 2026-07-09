@@ -30,10 +30,9 @@ select{background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:3
  <div class="h">
   <span class="dot" id="dot"></span>
   <span class="t">One-Code</span>
-  <span id="cwd" style="color:#8b949e;font-size:calc(var(--fs)*0.7)">...</span>
+  <span id="cwd" style="color:#8b949e;font-size:calc(var(--fs)*0.8)">D:\one-code</span>
   <span id="status" style="color:#8b949e;font-size:calc(var(--fs)*0.75);margin-left:8px;min-width:200px">Ready</span>
   <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
-   <span id="usage" style="color:#8b949e;font-size:calc(var(--fs)*0.7);margin-right:8px">0 tokens | ¥0</span>
    <select id="sel" onchange="SW(this.value)"></select>
    <button class="btn on" onclick="SM('build')">Build</button>
    <button class="btn" onclick="SM('plan')">Plan</button>
@@ -65,13 +64,16 @@ function S(){var t=document.getElementById('inp').value.trim();if(!t)return
    var elapsed=Math.round((Date.now()-st)/1000)
    document.getElementById('dot').style.background='#3fb950'
    document.getElementById('status').textContent='Done ('+elapsed+'s)'
-   A(d.error||d.response,d.error?'err':'agt')
-   pollUsage()
-  })
+   if(d.error)A(d.error,'err')
+    else{A('<div style="margin-bottom:2px;font-size:calc(var(--fs)*0.65);color:#8b949e">Thought: '+elapsed+'s</div>'+d.response,'agt')}
+    pollUsage()
+   })
 }
 function pollUsage(){
  fetch('/api/usage').then(r=>r.json()).then(d=>{
-  document.getElementById('usage').textContent=(d.tokens||0)+' tokens | ¥'+(d.cost||0).toFixed(4)
+  var t=document.getElementById('ctxT'),c=document.getElementById('ctxC')
+  if(t)t.textContent=d.tokens||0
+  if(c)c.textContent=(d.cost||0).toFixed(4)
  }).catch(function(){})
 }
 function SW(m){fetch('/api/model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:m})})}
@@ -88,4 +90,6 @@ setInterval(async function(){
 },3000)
 fetch('/api/models').then(r=>r.json()).then(d=>{document.getElementById('sel').innerHTML=d.models.map(m=>'<option value="'+m.id+'">'+m.name+'</option>').join('')})
 fetch('/api/cwd').then(r=>r.json()).then(d=>{document.getElementById('cwd').textContent=d.cwd||'-'})
+pollUsage()
+setInterval(function(){pollUsage()},5000)
 </script></body></html>
