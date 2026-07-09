@@ -115,6 +115,7 @@ def chat():
 
 @sock.route("/ws/chat")
 def chat_ws(ws):
+    import time as _time
     while True:
         try:
             data = json.loads(ws.receive())
@@ -124,17 +125,18 @@ def chat_ws(ws):
         if not text:
             continue
         agent = get_agent()
-        agent.memory.clear()
         for m in _build_context():
             agent.memory.add_message(m)
         try:
             result = agent.run(text)
-            ws.send(json.dumps({"type": "done", "text": result[-2000:]}))
+            # Stream response in chunks
+            chunk = 30
+            for i in range(0, len(result), chunk):
+                ws.send(json.dumps({"type": "text", "text": result[i:i+chunk]}))
+                _time.sleep(0.02)
+            ws.send(json.dumps({"type": "done"}))
         except Exception as e:
             ws.send(json.dumps({"type": "error", "text": str(e)}))
-
-        _current_task["running"] = False
-        _current_task["result"] = result if "result" in dir() else ""
 
 
 @app.route("/api/files", methods=["GET"])
