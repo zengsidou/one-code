@@ -376,6 +376,53 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
         except Exception as e:
             return f"[ERROR] SubAgent 执行失败: {e}"
 
+    @registry.register("lsp_def", "跳转到变量/函数/类的定义位置。参数: file=文件路径, line=行号, col=列号")
+    def lsp_def(file: str, line: int = 1, col: int = 1) -> str:
+        from tools.lsp_client import get_lsp
+        try:
+            defs = get_lsp().go_to_definition(file, line, col)
+        except Exception as e:
+            return f"[ERROR] LSP 未就绪: {e}\n提示: pip install python-lsp-server"
+        if not defs:
+            return f"未找到 {file}:{line}:{col} 的定义"
+        return "\n".join(f"{d['file']}:{d['line']}:{d['col']}" for d in defs[:5])
+
+    @registry.register("lsp_refs", "查找变量/函数/类的所有引用位置。参数: file=文件路径, line=行号, col=列号")
+    def lsp_refs(file: str, line: int = 1, col: int = 1) -> str:
+        from tools.lsp_client import get_lsp
+        try:
+            refs = get_lsp().find_references(file, line, col)
+        except Exception as e:
+            return f"[ERROR] LSP 未就绪: {e}"
+        if not refs:
+            return f"未找到 {file}:{line}:{col} 的引用"
+        lines = [f"{r['file']}:{r['line']}:{r['col']}" for r in refs[:10]]
+        return f"{len(refs)} 处引用:\n" + "\n".join(lines)
+
+    @registry.register("lsp_hover", "查看代码元素的类型签名和文档。参数: file=文件路径, line=行号, col=列号")
+    def lsp_hover(file: str, line: int = 1, col: int = 1) -> str:
+        from tools.lsp_client import get_lsp
+        try:
+            info = get_lsp().hover(file, line, col)
+        except Exception as e:
+            return f"[ERROR] LSP 未就绪: {e}"
+        return info[:1000]
+
+    @registry.register("lsp_diag", "获取文件的诊断信息（语法错误、类型警告）。参数: file=文件路径")
+    def lsp_diag(file: str) -> str:
+        from tools.lsp_client import get_lsp
+        try:
+            diags = get_lsp().diagnostics(file)
+        except Exception as e:
+            return f"[ERROR] LSP 未就绪: {e}"
+        if not diags:
+            return f"{file}: 无诊断问题"
+        lines = []
+        for d in diags[:15]:
+            sev = {1: "ERR", 2: "WARN", 3: "INFO", 4: "HINT"}.get(d["severity"], "?")
+            lines.append(f"  {file}:{d['line']}:{d['col']} [{sev}] {d['message']}")
+        return f"{file}: {len(diags)} 项诊断\n" + "\n".join(lines)
+
     # ━━━ 工具别名（LLM 可能用不同名称调用）━━━
     registry.add_alias("search_content", "grep")
     registry.add_alias("search_file", "grep")
@@ -390,3 +437,5 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
     registry.add_alias("rm", "delete_file")
     registry.add_alias("rename", "rename_file")
     registry.add_alias("mv", "rename_file")
+    registry.add_alias("goto_def", "lsp_def")
+    registry.add_alias("find_refs", "lsp_refs")

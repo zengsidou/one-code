@@ -403,31 +403,27 @@ class AgentLoop:
         return 0
 
     def _context_reset(self, current_task: str, context: list) -> list:
-        """Context Reset: 清理上下文窗口，通过结构化交接文档保留关键状态。
-
-        当压力达到 3 级时触发。流程:
-        1. 提取当前任务状态、已完成工作、待办事项
-        2. 清空短期记忆
-        3. 注入精简的交接文档 → 新 Agent 从干净状态继续
-        
-        对标 Anthropic 的 context reset 策略。
-        """
+        """Context Reset: 清理上下文窗口，通过结构化交接文档保留关键状态。"""
         msgs = self.memory.short_term.get_messages()
         if len(msgs) < 6:
             return context
 
-        tool_results = [m.content for m in msgs if m.role == "tool" and m.content]
-        user_query = next((m.content for m in msgs if m.role == "user" and m.content), current_task)
-
-        handoff = (
-            "[上下文重置] 为保持推理质量，上下文已清空。以下是之前工作的交接文档:\n\n"
-            f"# 当前任务\n{user_query[:500]}\n\n"
-            f"# 最近工具执行结果\n" +
-            "\n".join(r[:200] for r in tool_results[-3:]) +
-            "\n\n"
-            f"# 步骤统计\n已执行约 {self._last_step_count} 步。\n\n"
-            "请基于以上信息继续完成任务。如果需要之前的具体代码，请重新读取相关文件。"
-        )
+        # 优先使用 token_optimizer 的结构化摘要
+        if self._token_opt:
+            handoff = self._token_opt.summarize_work(msgs, current_task)
+            handoff += "\n\n请基于以上信息继续完成任务。如需之前的具体代码，请重新读取相关文件。"
+        else:
+            tool_results = [m.content for m in msgs if m.role == "tool" and m.content]
+            user_query = next((m.content for m in msgs if m.role == "user" and m.content), current_task)
+            handoff = (
+                "[上下文重置] 为保持推理质量，上下文已清空。以下是之前工作的交接文档:\n\n"
+                f"# 当前任务\n{user_query[:500]}\n\n"
+                f"# 最近工具执行结果\n" +
+                "\n".join(r[:200] for r in tool_results[-3:]) +
+                "\n\n"
+                f"# 步骤统计\n已执行约 {self._last_step_count} 步。\n\n"
+                "请基于以上信息继续完成任务。如果需要之前的具体代码，请重新读取相关文件。"
+            )
 
         self.memory.short_term._messages.clear()
         self.memory.short_term.add(Message(role="system", content=handoff))
