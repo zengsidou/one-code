@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """One-Code CLI — 简单的 coding 助手"""
-import sys, os, time
+import sys, os, time, argparse
 from tools.registry import ToolRegistry
 from tools.builtin import register_builtin_tools
 from memory.short_term import ShortTermMemory
@@ -15,6 +15,13 @@ class C:
 def main():
     if os.name=="nt": os.system("")
 
+    parser = argparse.ArgumentParser(description="One-Code CLI — coding 助手")
+    parser.add_argument("--contract-first", "-c", action="store_true",
+                        help="启用契约先行模式：先确认方向再拆解执行")
+    parser.add_argument("--max-steps", "-m", type=int, default=20,
+                        help="最大执行步数 (默认 20)")
+    args = parser.parse_args()
+
     key = os.environ.get("DEEPSEEK_API_KEY","")
     if not key: return print(C.p("请设置 DEEPSEEK_API_KEY","R"))
 
@@ -24,9 +31,12 @@ def main():
     register_builtin_tools(reg, llm=llm)
     mem = MemoryManager(short=ShortTermMemory(), long=LongTermMemory(llm))
     from agent.loop import AgentLoop
-    agent = AgentLoop(llm=llm, registry=reg, memory=mem, max_steps=20)
+    agent = AgentLoop(llm=llm, registry=reg, memory=mem,
+                      max_steps=args.max_steps,
+                      enable_contract_first=args.contract_first)
 
-    print(C.p("One-Code ready. Type a task, Enter to send. Ctrl+C to quit.", "C"))
+    mode_str = "契约先行" if args.contract_first else "直接执行"
+    print(C.p(f"One-Code ready [{mode_str}]. Type a task, Enter to send. Ctrl+C to quit.", "C"))
     print(f"  {C.p(str(len(reg.tool_names)),'G')} tools  {C.p(llm.model,'B')}\n")
 
     while True:

@@ -103,30 +103,33 @@ def chat():
 
 @sock.route("/ws/chat")
 def chat_ws(ws):
+    import threading as th
+    import queue
+    current_thread = None
+
+    def process(msg):
+        agent = get_agent()
+        agent.memory.clear()
+        for m in _build_context():
+            agent.memory.add_message(m)
+        _current_task["running"] = True
+        _current_task["task"] = msg
+        try:
+            result = agent.run(msg)
+            ws.send(json.dumps({"type": "done", "text": result[-2000:]}))
+        except Exception as e:
+            ws.send(json.dumps({"type": "error", "text": str(e)}))
+        _current_task["running"] = False
+
     while True:
         try:
             data = json.loads(ws.receive())
         except Exception:
             break
-
-        user_input = data.get("message", "").strip()
-        if not user_input:
-            ws.send(json.dumps({"type": "error", "text": "Empty message"}))
+        msg = data.get("message", "").strip()
+        if not msg:
             continue
-
-        agent = get_agent()
-        agent.memory.clear()
-        for msg in _build_context():
-            agent.memory.add_message(msg)
-
-        _current_task["running"] = True
-        _current_task["task"] = user_input
-
-        try:
-            result = agent.run(user_input)
-            ws.send(json.dumps({"type": "done", "text": result}))
-        except Exception as e:
-            ws.send(json.dumps({"type": "error", "text": str(e)}))
+        th.Thread(target=process, args=(msg,), daemon=True).start()
 
         _current_task["running"] = False
         _current_task["result"] = result if "result" in dir() else ""

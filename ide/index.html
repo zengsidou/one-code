@@ -148,42 +148,36 @@ function connectWS(){
   socket.onmessage=function(e){
     try{
       var d=JSON.parse(e.data);
-      if(d.type==='stream'){var el=document.getElementById('stream_'+d.id);if(!el){el=addMsg('','agent','stream_'+d.id);}el.innerHTML=renderMarkdown(d.text);el.scrollIntoView({behavior:'smooth',block:'end'})}
-      else if(d.type==='tool'){addToolCard(d.tool,d.result)}
-      else if(d.type==='done'){running=false;document.getElementById('sendBtn').disabled=false;document.getElementById('statusBadge').textContent='就绪';document.getElementById('statusBadge').className='status idle';updateStatus()}
+      if(d.type==='text'){removeEl('thinkingMsg'); var el=document.getElementById('stream_1');if(!el){el=addMsg('','agent','stream_1')} el.innerHTML+=renderMarkdown(d.text);el.scrollIntoView({behavior:'smooth',block:'end'})}
+      else if(d.type==='tool'){removeEl('thinkingMsg'); addToolCard(d.tool,d.result)}
+      else if(d.type==='done'){removeEl('thinkingMsg'); document.getElementById('statusBadge').textContent='就绪';document.getElementById('statusBadge').className='status idle';updateStatus()}
+      else if(d.type==='error'){removeEl('thinkingMsg'); addMsg(d.text,'error')}
     }catch(ex){}
   };
+  socket.onclose=function(){setTimeout(connectWS,1000)};
 }
 
-async function send(){
+function send(){
   var inp=document.getElementById('userInput');
   var msg=inp.value.trim();
-  if(!msg||running)return;
-  inp.value='';running=true;
-  document.getElementById('sendBtn').disabled=true;
+  if(!msg)return;
+  inp.value='';
   document.getElementById('statusBadge').textContent='思考中...';
   document.getElementById('statusBadge').className='status running';
   addMsg(msg,'user');
-  var thinking=addMsg('<span class="thinking">思考中...</span>','system','thinkingMsg');
-  try{
-    var res=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
-    var data=await res.json();
-    removeEl('thinkingMsg');
-    if(data.error)addMsg(data.error,'error');
-    else{
-      var id='resp_'+Date.now();
-      var el=addMsg(data.response,'agent',id);
-      if(el)el.innerHTML=renderMarkdown(data.response);
-    }
-  }catch(e){
-    removeEl('thinkingMsg');
-    addMsg('连接失败: '+e.message,'error');
+  addMsg('<span class="thinking">思考中...</span>','system','thinkingMsg');
+  if(socket&&socket.readyState===WebSocket.OPEN){
+    socket.send(JSON.stringify({message:msg}));
+  }else{
+    // fallback to HTTP
+    fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})}).then(function(r){return r.json()}).then(function(data){
+      removeEl('thinkingMsg');
+      if(data.error)addMsg(data.error,'error');
+      else addMsg(data.response,'agent');
+      document.getElementById('statusBadge').textContent='就绪';
+      document.getElementById('statusBadge').className='status idle';
+    });
   }
-  running=false;
-  document.getElementById('sendBtn').disabled=false;
-  document.getElementById('statusBadge').textContent='就绪';
-  document.getElementById('statusBadge').className='status idle';
-  updateStatus();updateTools();
 }
 
 function renderMarkdown(text){
