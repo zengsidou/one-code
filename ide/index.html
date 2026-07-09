@@ -33,7 +33,6 @@ select{background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:3
   <span id="cwd" style="color:#8b949e;font-size:calc(var(--fs)*0.8)">D:\one-code</span>
   <span id="status" style="color:#8b949e;font-size:calc(var(--fs)*0.75);margin-left:8px;min-width:200px">Ready</span>
   <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
-   <span id="usage" style="color:#58a6ff;font-size:22px;font-weight:700">0 tokens</span>
    <select id="sel" onchange="SW(this.value)"></select>
    <button class="btn on" onclick="SM('build')">Build</button>
    <button class="btn" onclick="SM('plan')">Plan</button>
@@ -47,6 +46,11 @@ select{background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:3
 </div>
 <div class="panel">
  <h3>Tasks</h3><div id="tasks"></div>
+ <hr style="border-color:#30363d;margin:calc(var(--fs)*0.5) 0">
+ <h3>Context</h3>
+ <div style="font-size:calc(var(--fs)*1.2);font-weight:700;color:var(--fg)" id="ctxTokens">-</div>
+ <div style="font-size:calc(var(--fs)*0.75);color:#8b949e" id="ctxPct">-</div>
+ <div style="font-size:calc(var(--fs)*0.75);color:#8b949e" id="ctxCost">-</div>
 </div>
 <script>
 var E=function(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
@@ -77,10 +81,10 @@ function S(){var t=document.getElementById('inp').value.trim();if(!t)return
 }
 function pollUsage(){
  fetch('/api/usage').then(r=>r.json()).then(d=>{
-  var u=document.getElementById('usage');if(u)u.textContent=(d.tokens||0)+' tokens'
-  var t=document.getElementById('ctxT'),c=document.getElementById('ctxC')
-  if(t)t.textContent=d.tokens||0
-  if(c)c.textContent=(d.cost||0).toFixed(4)
+  var t=d.tokens||0,m=d.max_tokens||65536,p=Math.round(t/m*100)
+  document.getElementById('ctxTokens').textContent=t.toLocaleString()+' tokens'
+  document.getElementById('ctxPct').textContent=p+'% used'
+  document.getElementById('ctxCost').textContent='¥'+(d.cost||0).toFixed(2)+' spent'
  }).catch(function(){})
 }
 function SW(m){fetch('/api/model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:m})})}
