@@ -26,6 +26,13 @@ class FakeLLM:
             return resp
         return Message(role="assistant", content="done")
 
+    def generate_stream(self, messages, tools=None):
+        resp = self.generate(messages, tools)
+        content = resp.content or ""
+        for ch in content:
+            yield ch
+            import sys; sys.stdout.write(ch); sys.stdout.flush()
+
     def embed(self, text: str) -> list[float]:
         return [0.0] * 1024
 

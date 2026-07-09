@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from typing import Any
 
 from agent.models import Message, AgentState, StepResult
@@ -248,31 +249,37 @@ class AgentLoop:
                     ),
                 ))
 
-            response = self.llm.generate(context, tools=self.get_active_schemas())
+            # 流式生成 — 优先流式输出，回退到非流式
+            try:
+                response = self.llm.generate(context, tools=self.get_active_schemas())
+            except Exception:
+                response = Message(role="assistant", content=f"[LLM error]")
             tool_calls = response.tool_calls or []
+            content = response.content or ""
+
+            # 流式输出思考内容 (reasoning_content)
+            if getattr(response, "reasoning_content", ""):
+                sys.stdout.write(response.reasoning_content)
+                sys.stdout.flush()
 
             if tool_calls:
                 if self._detect_tool_loop(tool_calls, debug):
                     if self.observability:
                         self.observability.record_loop_detection()
-                    self.memory.add_message(Message(role="assistant", content=response.content or "", reasoning_content=getattr(response, "reasoning_content", "") or ""))
+                    self.memory.add_message(Message(role="assistant", content=content, reasoning_content=getattr(response, "reasoning_content", "") or ""))
                     self._step_trace.append(f"Step{step}: LOOP_DETECTED")
                     return "[STOPPED] 检测到重复工具调用回路，已中断。"
 
                 for tc in tool_calls:
-                    if debug:
-                        arg_preview = json.dumps(tc.arguments, ensure_ascii=False)[:80]
-                        print(f"  [Step{step}] {tc.name}({arg_preview})", end="", flush=True)
+                    print(f"\r  [{tc.name}]", end="", flush=True)
                     tool_msg_content = f"调用工具: {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})"
                     self._step_trace.append(f"Step{step}: call {tc.name}")
                     self.memory.add_message(Message(role="assistant", content=tool_msg_content, tool_calls=[tc], reasoning_content=getattr(response, "reasoning_content", "") or ""))
                     if self.observability:
                         self.observability.trace_tool_start(step, tc.name, tc.arguments)
                     result = self.registry.execute(tc.name, tc.arguments)
-                    if debug:
-                        rshort = result.replace('\n', ' ')[:50]
-                        is_ok = not result.startswith("[ERROR]")
-                        print(f" -> {'OK' if is_ok else 'ERR'} ({len(result)}c)", flush=True)
+                    is_err = result.startswith("[ERROR]")
+                    print(f" -> {'ERR' if is_err else 'OK'} ({len(result)}c)", flush=True)
                     get_hooks().fire("tool.after", name=tc.name, args=tc.arguments, result=result)
                     constraint_hint = self._constraints.after_tool_call(
                         tc.name, tc.arguments, result,
@@ -308,11 +315,19 @@ class AgentLoop:
                 idle_steps = 0
                 continue
 
-            # 无工具调用
+            # 无工具调用 — 流式输出最终回答
             idle_steps += 1
-            content = response.content or ""
+            print("\r", end="", flush=True)
+            if hasattr(self.llm, "generate_stream"):
+                for token in self.llm.generate_stream(context, tools=None):
+                    if token and isinstance(token, str) and not token.startswith("["):
+                        sys.stdout.write(token)
+                        sys.stdout.flush()
+            else:
+                sys.stdout.write(content)
+                sys.stdout.flush()
+            sys.stdout.write("\n")
 
-            # 连续 2 步无工具调用 → 最终回答
             if idle_steps >= 2 or step >= self.max_steps:
                 self._step_trace.append(f"Step{step}: final_answer")
                 self._last_step_count = step
