@@ -18,7 +18,7 @@ from memory.long_term import LongTermMemory
 from memory import MemoryManager
 from memory.context_boot import ContextBootstrapper
 from agent.loop import AgentLoop
-from agent.models import Message
+from agent.models import Message, ToolCall
 from llm.deepseek_api import DeepSeekAdapter
 
 app = Flask(__name__, static_folder=os.path.join(IDE_DIR, "ide"), static_url_path="")
@@ -116,7 +116,7 @@ def chat():
 @app.route("/api/chat/stream", methods=["POST"])
 def chat_stream():
     from flask import Response
-    import time as _time, threading
+    import threading, queue, time
 
     data = request.get_json()
     user_input = data.get("message", "").strip()
@@ -128,18 +128,75 @@ def chat_stream():
         agent.memory.add_message(msg)
 
     def generate():
-        result = ""
-        try:
-            result = agent.run(user_input)
-            # Stream response character by character
-            for ch in result:
-                yield f"data: {json.dumps({'text': ch})}\n\n"
-                _time.sleep(0.005)
-            yield f"data: {json.dumps({'done': True, 'response': result})}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        # Build initial context
+        agent.memory.add_message(Message(role="user", content=user_input))
+        step = 0
+        idle = 0
+        max_steps = agent.max_steps
 
-    return Response(generate(), mimetype="text/event-stream")
+        while step < max_steps:
+            step += 1
+            context = agent.memory.get_context(query=user_input[:200])
+            system_prompt = agent.system_prompt
+            context.insert(0, Message(role="system", content=system_prompt))
+
+            # Call LLM with streaming, buffer into larger chunks
+            text_buf = ""
+            tool_calls = []
+            for event in agent.llm.generate_stream(context, tools=agent.get_active_schemas()):
+                if event["type"] == "text":
+                    text_buf += event["text"]
+                    if len(text_buf) >= 5:  # Send every 5+ chars
+                        yield f"data: {json.dumps({'type':'text','text':text_buf})}\n\n"
+                        text_buf = ""
+                elif event["type"] == "tool":
+                    if text_buf:  # Flush remaining text
+                        yield f"data: {json.dumps({'type':'text','text':text_buf})}\n\n"
+                        text_buf = ""
+                    tool_calls.append(event)
+                elif event["type"] == "error":
+                    yield f"data: {json.dumps(event)}\n\n"
+                    return
+                elif event["type"] == "done":
+                    break
+
+            # Flush remaining buffered text
+            if text_buf:
+                yield f"data: {json.dumps({'type':'text','text':text_buf})}\n\n"
+                text_buf = ""
+
+            # Handle tool calls
+            if tool_calls:
+                idle = 0
+                has_tool_msg = False
+                for tc in tool_calls:
+                    try:
+                        args = tc.get("args", {})
+                        if isinstance(args, str):
+                            import json as _json
+                            args = _json.loads(args) if args.strip() else {}
+                    except Exception:
+                        args = {}
+                    tc_obj = ToolCall(id=tc["name"], name=tc["name"], arguments=args)
+                    result = agent.registry.execute(tc["name"], args)
+                    agent.memory.add_message(Message(role="assistant", tool_calls=[tc_obj]))
+                    agent.memory.add_message(Message(role="tool", content=result, tool_call_id=tc["name"], tool_name=tc["name"]))
+                    has_tool_msg = True
+                if has_tool_msg:
+                    continue
+
+            # No tool calls — text response
+            idle += 1
+            if text_content.strip():
+                agent.memory.add_message(Message(role="assistant", content=text_content))
+            if idle >= 2 or step >= max_steps:
+                yield f"data: {json.dumps({'type': 'done', 'text': text_content})}\n\n"
+                return
+
+        yield f"data: {json.dumps({'type': 'done', 'text': text_content if 'text_content' in dir() else ''})}\n\n"
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
 
 
 @sock.route("/ws/chat")

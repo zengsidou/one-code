@@ -73,58 +73,50 @@ class DeepSeekAdapter(BaseLLM):
 
         return Message(role="assistant", content="[LLM error] max retries exceeded")
 
-    def generate_stream(self, messages: list[Message], tools: list[dict] | None = None) -> "collections.abc.Generator[str]":
-        """流式生成 — 逐 token 返回，用于实时 UI 展示"""
+    def generate_stream(self, messages: list[Message], tools: list[dict] | None = None):
+        """流式生成 — 返回 {type: 'text'/'tool'/'done', ...} 事件迭代器"""
         api_messages = self._build_api_messages(messages)
-
         try:
             body: dict[str, Any] = {
-                "model": self.model,
-                "messages": api_messages,
-                "temperature": 0.3,
-                "max_tokens": 4096,
-                "stream": True,
+                "model": self.model, "messages": api_messages,
+                "temperature": 0.3, "max_tokens": 4096, "stream": True,
             }
             if tools:
                 body["tools"] = tools
                 body["tool_choice"] = "auto"
-
             with httpx.Client(timeout=self.timeout) as client:
-                with client.stream(
-                    "POST",
-                    f"{DEEPSEEK_BASE}/chat/completions",
-                    json=body,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                ) as resp:
+                with client.stream("POST", f"{DEEPSEEK_BASE}/chat/completions",
+                    json=body, headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}) as resp:
                     resp.raise_for_status()
+                    tool_calls_acc = {}
                     for line in resp.iter_lines():
-                        if line.startswith("data: "):
-                            chunk = line[6:]
-                            if chunk == "[DONE]":
-                                break
-                            try:
-                                import json
-                                data = json.loads(chunk)
-                                delta = data.get("choices", [{}])[0].get("delta", {})
-                                content = delta.get("content", "")
-                                reasoning = delta.get("reasoning_content", "")
-                                if reasoning:
-                                    yield f"[思考] {reasoning}"
-                                if content:
-                                    yield content
-                                # Check for tool calls in stream
-                                tc = delta.get("tool_calls")
-                                if tc:
-                                    for t in tc:
-                                        fn = t.get("function", {})
-                                        yield f"\n[工具调用] {fn.get('name', '?')}({fn.get('arguments', '')})"
-                            except Exception:
-                                pass
+                        if not line.startswith("data: "): continue
+                        chunk = line[6:]
+                        if chunk == "[DONE]": break
+                        try:
+                            import json
+                            data = json.loads(chunk)
+                            delta = data.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content: yield {"type": "text", "text": content}
+                            tc_list = delta.get("tool_calls")
+                            if tc_list:
+                                for tc in tc_list:
+                                    idx = tc.get("index", 0)
+                                    fn = tc.get("function", {})
+                                    if idx not in tool_calls_acc:
+                                        tool_calls_acc[idx] = {"name": "", "args": ""}
+                                    tool_calls_acc[idx]["name"] += fn.get("name", "")
+                                    tool_calls_acc[idx]["args"] += fn.get("arguments", "")
+                        except Exception:
+                            pass
+                    if tool_calls_acc:
+                        for tc in sorted(tool_calls_acc.values(), key=lambda x: list(tool_calls_acc.keys())[list(tool_calls_acc.values()).index(x)]):
+                            yield {"type": "tool", "name": tc["name"],
+                                   "args": self._safe_parse_json(tc["args"])}
         except Exception as e:
-            yield f"[STREAM ERROR] {e}"
+            yield {"type": "error", "text": str(e)}
+        yield {"type": "done"}
 
     @staticmethod
     def _parse_response(data: dict) -> Message:
