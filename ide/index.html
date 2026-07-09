@@ -78,26 +78,23 @@ body{font:var(--fs)/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);col
 <body>
 <div class="main">
   <div class="header">
-    <span class="title">One-Code IDE</span>
-    <span style="font-size:calc(var(--fs)*0.9);color:var(--fg2)">
-      <button class="mode-btn active" id="modeBuild" onclick="setMode('build')" style="margin-right:4px">Build</button>
-      <button class="mode-btn" id="modePlan" onclick="setMode('plan')">Plan</button>
-      <button class="mode-btn" id="modeCompose" onclick="setMode('compose')">Compose</button>
-      &nbsp;|&nbsp; <select id="modelSelect" onchange="switchModel(this.value)" style="background:var(--bg3);color:var(--accent);border:1px solid var(--border);border-radius:4px;font-size:calc(var(--fs)*0.85);padding:2px 6px">
-        <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-        <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-        <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-        <option value="gpt-4o">GPT-4o</option>
+    <span class="title">One-Code</span>
+    <span id="cwdDisplay" style="color:var(--fg2);font-size:calc(var(--fs)*0.75);margin-left:12px">...</span>
+    <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
+      <select id="modelSelect" onchange="switchModel(this.value)" style="background:var(--bg3);color:var(--accent);border:1px solid var(--border);border-radius:4px;font-size:calc(var(--fs)*0.8);padding:2px 6px">
+        <option>loading...</option>
       </select>
-      &nbsp; <span id="statusBadge" class="status idle">就绪</span>
+      <button class="mode-btn active" id="modeBuild" onclick="setMode('build')">Build</button>
+      <button class="mode-btn" id="modePlan" onclick="setMode('plan')">Plan</button>
+      <span id="statusBadge" class="status idle">Ready</span>
     </span>
   </div>
   <div class="chat" id="chatBox">
-    <div class="msg system">One-Code IDE 已就绪。输入编程任务开始。</div>
+    <div class="msg system">One-Code ready.</div>
   </div>
-  <div class="input-bar" style="position:relative">
-    <input type="text" id="userInput" placeholder="输入编程任务... (Enter 发送)" onkeydown="handleKey(event)" oninput="showSuggest(event)" autocomplete="off">
-    <button id="sendBtn" onclick="send()">发送</button>
+  <div class="input-bar">
+    <input type="text" id="userInput" placeholder="Input task..." onkeydown="handleKey(event)" oninput="showSuggest(event)" autocomplete="off">
+    <button id="sendBtn" onclick="send()">Send</button>
     <div id="suggestBox" style="display:none;position:absolute;bottom:100%;left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);max-height:160px;overflow-y:auto;z-index:100"></div>
   </div>
 </div>
@@ -106,8 +103,20 @@ body{font:var(--fs)/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);col
   <div class="stat-row"><span class="stat-label">模型</span><span class="stat-val" id="modelVal">-</span></div>
   <div class="stat-row"><span class="stat-label">模式</span><span class="stat-val" id="modeVal">build</span></div>
   <hr>
+  <div class="stat-row"><span class="stat-label">工具数</span><span class="stat-val" id="toolCount">-</span></div>
   <div class="stat-row"><span class="stat-label">Token</span><span class="stat-val" id="tokenVal">-</span></div>
-  <div class="stat-row"><span class="stat-label">费用</span><span class="stat-val" id="costVal">-</span></div>
+  <div class="stat-row"><span class="stat-label">费用</span><span class="stat-val" id="costVal">¥0</span></div>
+  <div class="stat-row"><span class="stat-label">步骤</span><span class="stat-val" id="stepVal">0</span></div>
+</div>
+  <div class="chat" id="chatBox">
+    <div class="msg system">One-Code ready.</div>
+  </div>
+  <div class="input-bar">
+    <span style="color:var(--fg2);font-size:calc(var(--fs)*0.7));white-space:nowrap" id="tokenDisplay">0 tokens | ¥0</span>
+    <input type="text" id="userInput" placeholder="Input task..." onkeydown="handleKey(event)" oninput="showSuggest(event)" autocomplete="off">
+    <button id="sendBtn" onclick="send()">Send</button>
+    <div id="suggestBox" style="display:none;position:absolute;bottom:100%;left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);max-height:160px;overflow-y:auto;z-index:100"></div>
+  </div>
 </div>
 <script>
 let running=false;
@@ -116,7 +125,29 @@ function esc(s){var d=document.createElement('div');d.textContent=s;return d.inn
 
 async function start(){
   fetchSuggestions();
-  setInterval(updateStatus,10000);
+  // Load model list
+  fetch('/api/models').then(function(r){return r.json()}).then(function(d){
+    var s=document.getElementById('modelSelect');s.innerHTML='';
+    (d.models||[]).forEach(function(m){s.innerHTML+='<option value=\"'+m.id+'\">'+m.name+'</option>'});
+  });
+  // Set working directory
+  fetch('/api/cwd').then(function(r){return r.json()}).then(function(d){
+    document.getElementById('cwdDisplay').textContent = d.cwd || '-';
+  });
+  setInterval(updateStatus,3000);
+}
+// === status ===
+async function updateStatus(){
+  try{
+    var res=await fetch('/api/usage');var data=await res.json();
+    document.getElementById('tokenVal').textContent=data.tokens||0;
+    document.getElementById('costVal').textContent='\u00a5'+((data.cost||0).toFixed(4));
+    document.getElementById('modelVal').textContent=data.model||'-';
+  }catch(e){}
+  try{
+    var res2=await fetch('/api/status');var data2=await res2.json();
+    document.getElementById('toolCount').textContent=data2.tools||'-';
+  }catch(e){}
 }
 // === status ===
 async function updateStatus(){
@@ -133,10 +164,12 @@ function send(){
   var msg=inp.value.trim();
   if(!msg)return;
   inp.value='';
-  document.getElementById('statusBadge').textContent='思考中...';
+  document.getElementById('statusBadge').textContent='Thinking...';
   document.getElementById('statusBadge').className='status running';
   addMsg(msg,'user');
   addMsg('<span class="thinking">...</span>','system','thinkingMsg');
+  var s=parseInt(document.getElementById('stepVal').textContent||0)+1;
+  document.getElementById('stepVal').textContent=s;
   fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})})
     .then(function(r){return r.json()})
     .then(function(data){
@@ -245,15 +278,10 @@ function setMode(mode){
   fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode})});
   document.querySelectorAll('.mode-btn').forEach(function(b){b.classList.remove('active')});
   document.getElementById('mode'+mode.charAt(0).toUpperCase()+mode.slice(1)).classList.add('active');
-  currentMode=mode;
   document.getElementById('modeVal').textContent=mode;
 }
 function switchModel(model){
-  fetch('/api/model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:model})})
-    .then(function(r){return r.json()})
-    .then(function(d){if(d.ok)document.getElementById('modelVal').textContent=model})
-    .catch(function(){});
-  document.getElementById('modelVal').textContent=model;
+  fetch('/api/model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:model})});
 }
 // === token/cost polling ===
 setInterval(function(){

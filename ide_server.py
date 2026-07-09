@@ -63,6 +63,19 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+@app.route("/api/models", methods=["GET"])
+def list_models():
+    return jsonify({"models": [
+        {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro", "provider": "deepseek"},
+        {"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash", "provider": "deepseek"},
+        {"id": "deepseek-reasoner", "name": "DeepSeek R1", "provider": "deepseek"},
+        {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "provider": "gemini"},
+        {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "provider": "gemini"},
+        {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai"},
+        {"id": "gpt-4.1", "name": "GPT-4.1", "provider": "openai"},
+    ]})
+
+
 @app.route("/api/chat", methods=["POST"])
 def chat():
     data = request.get_json()
@@ -189,6 +202,11 @@ def usage():
     except Exception:
         tokens, cost = 0, 0
     return jsonify({"tokens": tokens, "cost": cost, "max_tokens": agent.memory.short_term.max_tokens, "model": getattr(agent.llm, "model", "?"), "pricing": "¥1/M input ¥2/M output"})
+
+
+@app.route("/api/cwd", methods=["GET"])
+def cwd():
+    return jsonify({"cwd": os.getcwd()})
 
 
 @app.route("/api/mode", methods=["POST"])
