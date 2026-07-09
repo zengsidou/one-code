@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
 """One-Code Desktop IDE — PyWebView 桌面客户端"""
-import os
-import sys
-import threading
+import os, sys, io, threading
+
+# Suppress all console output
+sys.stdout = io.StringIO()
+sys.stderr = io.StringIO()
 
 IDE_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("ONE_CODE_PORT", "8765"))
 
 
 def start_server():
+    import logging
+    logging.getLogger("werkzeug").setLevel(logging.ERROR)
     from ide_server import app
     app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False)
 

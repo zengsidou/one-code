@@ -131,7 +131,7 @@ body{font:var(--fs)/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);col
   <button onclick="grow()" style="width:100%;padding:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:4px;cursor:pointer">生成挑战</button>
 </div>
 <script>
-let running=false,socket=null;
+let running=false;
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}}
 function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
 
@@ -139,22 +139,8 @@ async function start(){
   await loadFiles();
   await updateStatus();
   await loadTools();
-  connectWS();
+  fetchSuggestions();
   setInterval(updateStatus,10000);
-}
-function connectWS(){
-  var proto=location.protocol==='https:'?'wss':'ws';
-  socket=new WebSocket(proto+'://'+location.host+'/ws/chat');
-  socket.onmessage=function(e){
-    try{
-      var d=JSON.parse(e.data);
-      if(d.type==='text'){removeEl('thinkingMsg'); var el=document.getElementById('stream_1');if(!el){el=addMsg('','agent','stream_1')} el.innerHTML+=renderMarkdown(d.text);el.scrollIntoView({behavior:'smooth',block:'end'})}
-      else if(d.type==='tool'){removeEl('thinkingMsg'); addToolCard(d.tool,d.result)}
-      else if(d.type==='done'){removeEl('thinkingMsg'); document.getElementById('statusBadge').textContent='就绪';document.getElementById('statusBadge').className='status idle';updateStatus()}
-      else if(d.type==='error'){removeEl('thinkingMsg'); addMsg(d.text,'error')}
-    }catch(ex){}
-  };
-  socket.onclose=function(){setTimeout(connectWS,1000)};
 }
 
 function send(){
@@ -165,19 +151,23 @@ function send(){
   document.getElementById('statusBadge').textContent='思考中...';
   document.getElementById('statusBadge').className='status running';
   addMsg(msg,'user');
-  addMsg('<span class="thinking">思考中...</span>','system','thinkingMsg');
-  if(socket&&socket.readyState===WebSocket.OPEN){
-    socket.send(JSON.stringify({message:msg}));
-  }else{
-    // fallback to HTTP
-    fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})}).then(function(r){return r.json()}).then(function(data){
+  addMsg('<span class="thinking">...</span>','system','thinkingMsg');
+  fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})})
+    .then(function(r){return r.json()})
+    .then(function(data){
       removeEl('thinkingMsg');
       if(data.error)addMsg(data.error,'error');
       else addMsg(data.response,'agent');
       document.getElementById('statusBadge').textContent='就绪';
       document.getElementById('statusBadge').className='status idle';
+      updateStatus();
+    })
+    .catch(function(e){
+      removeEl('thinkingMsg');
+      addMsg('连接失败','error');
+      document.getElementById('statusBadge').textContent='就绪';
+      document.getElementById('statusBadge').className='status idle';
     });
-  }
 }
 
 function renderMarkdown(text){
@@ -282,7 +272,7 @@ function setMode(mode){
 setInterval(function(){
   fetch('/api/usage').then(function(r){return r.json()}).then(function(d){
     document.getElementById('tokenVal').textContent=d.tokens||0;
-    document.getElementById('costVal').textContent='$'+((d.cost||0).toFixed(4));
+    document.getElementById('costVal').textContent='¥'+((d.cost||0).toFixed(4));
   }).catch(function(){});
 },3000);
 

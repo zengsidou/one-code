@@ -103,33 +103,23 @@ def chat():
 
 @sock.route("/ws/chat")
 def chat_ws(ws):
-    import threading as th
-    import queue
-    current_thread = None
-
-    def process(msg):
-        agent = get_agent()
-        agent.memory.clear()
-        for m in _build_context():
-            agent.memory.add_message(m)
-        _current_task["running"] = True
-        _current_task["task"] = msg
-        try:
-            result = agent.run(msg)
-            ws.send(json.dumps({"type": "done", "text": result[-2000:]}))
-        except Exception as e:
-            ws.send(json.dumps({"type": "error", "text": str(e)}))
-        _current_task["running"] = False
-
     while True:
         try:
             data = json.loads(ws.receive())
         except Exception:
             break
-        msg = data.get("message", "").strip()
-        if not msg:
+        text = data.get("message", "").strip()
+        if not text:
             continue
-        th.Thread(target=process, args=(msg,), daemon=True).start()
+        agent = get_agent()
+        agent.memory.clear()
+        for m in _build_context():
+            agent.memory.add_message(m)
+        try:
+            result = agent.run(text)
+            ws.send(json.dumps({"type": "done", "text": result[-2000:]}))
+        except Exception as e:
+            ws.send(json.dumps({"type": "error", "text": str(e)}))
 
         _current_task["running"] = False
         _current_task["result"] = result if "result" in dir() else ""
@@ -194,13 +184,11 @@ def usage():
     agent = get_agent()
     try:
         tokens = agent.memory.short_term.get_token_count()
-        # DeepSeek V4 pricing: $0.137/M input, $0.274/M output (est 50/50 split)
-        cost_input = (tokens / 1_000_000) * 0.137
-        cost_output = (tokens / 1_000_000) * 0.274
-        cost = round((cost_input + cost_output) / 2, 6)
+        # DeepSeek V4 pricing: ¥1/M input, ¥2/M output (est 50/50 split)
+        cost = round(tokens / 1_000_000 * 1.5, 6)
     except Exception:
         tokens, cost = 0, 0
-    return jsonify({"tokens": tokens, "cost": cost, "max_tokens": agent.memory.short_term.max_tokens})
+    return jsonify({"tokens": tokens, "cost": cost, "max_tokens": agent.memory.short_term.max_tokens, "model": getattr(agent.llm, "model", "?"), "pricing": "¥1/M input ¥2/M output"})
 
 
 @app.route("/api/mode", methods=["POST"])

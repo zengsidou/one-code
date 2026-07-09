@@ -116,13 +116,12 @@ class AgentLoop:
         self._step_trace: list[str] = []
         self._last_step_count = 0
         self.mode = self.MODE_BUILD
-        self._plan_schemas = [s for s in self.registry.get_schemas()
-                              if s.get("function", {}).get("name", "") in
-                              ("read_file", "grep", "glob", "list_dir", "lsp", "calculate")]
 
     def get_active_schemas(self):
         if self.mode == self.MODE_PLAN:
-            return self._plan_schemas
+            return [s for s in self.registry.get_schemas()
+                    if s.get("function", {}).get("name", "") in
+                    ("read_file", "grep", "glob", "list_dir", "lsp", "calculate")]
         return self.registry.get_schemas()
 
     def run(self, user_input: str, debug: bool = False, boot_context: list[Message] | None = None) -> str:
