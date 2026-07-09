@@ -13,18 +13,6 @@
   --fs:16px;
 }
 body{font:var(--fs)/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--fg);display:flex;height:100vh;overflow:hidden}
-/* sidebar */
-.sidebar{
-  width:calc(var(--fs)*17.5);background:var(--bg2);border-right:1px solid var(--border);
-  display:flex;flex-direction:column;flex-shrink:0;
-}
-.sidebar h2{font-size:var(--fs);color:var(--fg2);padding:calc(var(--fs)*0.7) calc(var(--fs)*1.2) calc(var(--fs)*0.3);text-transform:uppercase;letter-spacing:.5px}
-.file-tree{flex:1;overflow-y:auto;padding:calc(var(--fs)*0.3) 0;font-size:var(--fs)}
-.file-tree .item{padding:calc(var(--fs)*0.25) calc(var(--fs)*1.2);cursor:pointer;display:flex;align-items:center;gap:calc(var(--fs)*0.5);white-space:nowrap}
-.file-tree .item:hover{background:var(--bg3)}
-.file-tree .item.dir{color:var(--accent)}
-.file-tree .item.file{color:var(--fg)}
-.file-tree .item .icon{font-size:calc(var(--fs)*0.9);width:calc(var(--fs)*1.2);text-align:center}
 /* main */
 .main{flex:1;display:flex;flex-direction:column;min-width:0}
 .header{
@@ -88,12 +76,6 @@ body{font:var(--fs)/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);col
 </style>
 </head>
 <body>
-<div class="sidebar">
-  <h2>Files</h2>
-  <div class="file-tree" id="fileTree">加载中...</div>
-  <h2>Tools</h2>
-  <div class="file-tree" id="toolList" style="flex:none;max-height:200px"></div>
-</div>
 <div class="main">
   <div class="header">
     <span class="title">One-Code IDE</span>
@@ -115,19 +97,13 @@ body{font:var(--fs)/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);col
   </div>
 </div>
 <div class="stats" id="statsPanel">
-  <h3>状态</h3>
-  <div class="stat-row"><span class="stat-label">工具数</span><span class="stat-val" id="toolCount">-</span></div>
-  <div class="stat-row"><span class="stat-label">任务</span><span class="stat-val" id="taskCount">-</span></div>
-  <div class="stat-row"><span class="stat-label">成功率</span><span class="stat-val" id="successRate">-</span></div>
-  <div class="stat-row"><span class="stat-label">技能</span><span class="stat-val" id="skillCount">-</span></div>
+  <h3>会话</h3>
+  <div class="stat-row"><span class="stat-label">模型</span><span class="stat-val" id="modelVal">-</span></div>
+  <div class="stat-row"><span class="stat-label">模式</span><span class="stat-val" id="modeVal">build</span></div>
   <hr>
-  <h3>当前会话</h3>
-  <div class="stat-row"><span class="stat-label">步骤</span><span class="stat-val" id="stepsVal">-</span></div>
   <div class="stat-row"><span class="stat-label">Token</span><span class="stat-val" id="tokenVal">-</span></div>
   <div class="stat-row"><span class="stat-label">费用</span><span class="stat-val" id="costVal">-</span></div>
-  <div class="stat-row"><span class="stat-label">模型</span><span class="stat-val" id="modelVal">-</span></div>
-  <button onclick="clearMemory()" style="width:100%;padding:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:4px;cursor:pointer;margin-bottom:4px">清空记忆</button>
-  <button onclick="grow()" style="width:100%;padding:4px;background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:4px;cursor:pointer">生成挑战</button>
+  <button onclick="clearMemory()" style="width:100%;padding:calc(var(--fs)*0.4);background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:4px;cursor:pointer;font-size:calc(var(--fs)*0.85)">清空记忆</button>
 </div>
 <script>
 let running=false;
@@ -135,12 +111,19 @@ function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()
 function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
 
 async function start(){
-  await loadFiles();
-  await updateStatus();
-  await loadTools();
   fetchSuggestions();
   setInterval(updateStatus,10000);
 }
+// === status ===
+async function updateStatus(){
+  try{
+    var res=await fetch('/api/usage');var data=await res.json();
+    document.getElementById('tokenVal').textContent=data.tokens||0;
+    document.getElementById('costVal').textContent='\u00a5'+((data.cost||0).toFixed(4));
+    if(data.model)document.getElementById('modelVal').textContent=data.model;
+  }catch(e){}
+}
+async function clearMemory(){await fetch('/api/clear',{method:'POST'});addMsg('记忆已清空','system')}
 
 function send(){
   var inp=document.getElementById('userInput');
