@@ -68,11 +68,11 @@ function S(){var t=document.getElementById('inp').value.trim();if(!t)return
  A('<b>'+E(t)+'</b>','usr')
  fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:t})})
   .then(r=>r.json()).then(d=>{
-   clearInterval(timer);var elapsed=Math.round((Date.now()-st)/1000)
-   document.getElementById('dot').style.background='#3fb950';document.getElementById('status').textContent='Ready'
+   clearInterval(timer);var e2=Math.round((Date.now()-st)/1000)
+   document.getElementById('dot').style.background='#3fb950';document.getElementById('status').textContent='Ready ('+e2+'s)'
+   A('<div style="font-size:calc(var(--fs)*0.65);color:#8b949e;margin-bottom:2px">Thought: '+e2+'s</div>','sys')
    if(d.error)A(d.error,'err')
-   else{A('<div style="font-size:calc(var(--fs)*0.65);color:#8b949e;margin-bottom:2px">Thought: '+elapsed+'s</div>','sys');A(d.response,'agt')}
-   pollUsage()
+   else{A('<div style="font-size:calc(var(--fs)*0.65);color:#8b949e;margin-bottom:2px">Thought: '+e2+'s</div>','sys');A(d.response,'agt')}
   })
 }
 function pollUsage(){

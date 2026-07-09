@@ -146,8 +146,8 @@ def chat_stream():
             for event in agent.llm.generate_stream(context, tools=agent.get_active_schemas()):
                 if event["type"] == "text":
                     text_buf += event["text"]
-                    if len(text_buf) >= 5:  # Send every 5+ chars
-                        yield f"data: {json.dumps({'type':'text','text':text_buf})}\n\n"
+                    if len(text_buf) >= 5:
+                        yield f"data: {json.dumps({'type':'text-delta','text':text_buf})}\n\n"
                         text_buf = ""
                 elif event["type"] == "tool":
                     if text_buf:  # Flush remaining text
@@ -162,7 +162,7 @@ def chat_stream():
 
             # Flush remaining buffered text
             if text_buf:
-                yield f"data: {json.dumps({'type':'text','text':text_buf})}\n\n"
+                yield f"data: {json.dumps({'type':'text-delta','text':text_buf})}\n\n"
                 text_buf = ""
 
             # Handle tool calls
