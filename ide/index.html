@@ -31,7 +31,9 @@ select{background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:3
   <span class="dot" id="dot"></span>
   <span class="t">One-Code</span>
   <span id="cwd" style="color:#8b949e;font-size:calc(var(--fs)*0.7)">...</span>
+  <span id="status" style="color:#8b949e;font-size:calc(var(--fs)*0.75);margin-left:8px;min-width:200px">Ready</span>
   <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
+   <span id="usage" style="color:#8b949e;font-size:calc(var(--fs)*0.7);margin-right:8px">0 tokens | ¥0</span>
    <select id="sel" onchange="SW(this.value)"></select>
    <button class="btn on" onclick="SM('build')">Build</button>
    <button class="btn" onclick="SM('plan')">Plan</button>
@@ -51,14 +53,26 @@ var E=function(s){var d=document.createElement('div');d.textContent=s;return d.i
 function M(t){t=E(t);t=t.replace(/```\w*\n([\s\S]*?)```/g,'<pre><code>$1</code></pre>');t=t.replace(/`([^`]+)`/g,'<code>$1</code>');t=t.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');t=t.replace(/\n/g,'<br>');return t}
 function A(t,y,i){var d=document.createElement('div');d.className='msg '+y;if(i)d.id=i;d.innerHTML=y==='agt'?M(t):t;document.getElementById('chat').appendChild(d);d.scrollIntoView({behavior:'smooth',block:'end'})}
 function S(){var t=document.getElementById('inp').value.trim();if(!t)return
- document.getElementById('inp').value='';document.getElementById('dot').style.background='#d29922'
+ document.getElementById('inp').value='';var st=Date.now()
+ document.getElementById('dot').style.background='#d29922'
+ document.getElementById('status').textContent='Thinking...'
+ var timer=setInterval(function(){document.getElementById('status').textContent='Thinking... ('+Math.round((Date.now()-st)/1000)+'s)'},500)
+ document.getElementById('status').textContent='Thinking...'
  A('<b>'+E(t)+'</b>','usr');A('<span class="thinking">...</span>','sys','thinking')
  fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:t})})
   .then(r=>r.json()).then(d=>{
-   var e=document.getElementById('thinking');if(e)el.remove()
+   clearInterval(timer);var e=document.getElementById('thinking');if(e)e.remove()
+   var elapsed=Math.round((Date.now()-st)/1000)
    document.getElementById('dot').style.background='#3fb950'
+   document.getElementById('status').textContent='Done ('+elapsed+'s)'
    A(d.error||d.response,d.error?'err':'agt')
+   pollUsage()
   })
+}
+function pollUsage(){
+ fetch('/api/usage').then(r=>r.json()).then(d=>{
+  document.getElementById('usage').textContent=(d.tokens||0)+' tokens | ¥'+(d.cost||0).toFixed(4)
+ }).catch(function(){})
 }
 function SW(m){fetch('/api/model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:m})})}
 function SM(m){fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:m})})
