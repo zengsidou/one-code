@@ -84,9 +84,10 @@ def chat():
         return jsonify({"error": "Empty message"}), 400
 
     agent = get_agent()
-
-    for msg in _build_context():
-        agent.memory.add_message(msg)
+    # Only add boot context once — first message in a session
+    if agent.memory.short_term.get_token_count() < 100:
+        for msg in _build_context():
+            agent.memory.add_message(msg)
 
     _current_task["running"] = True
     _current_task["task"] = user_input

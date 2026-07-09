@@ -59,7 +59,7 @@ select{background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:3
 <script>
 var E=function(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function M(t){t=E(t);t=t.replace(/```\w*\n([\s\S]*?)```/g,'<pre><code>$1</code></pre>');t=t.replace(/`([^`]+)`/g,'<code>$1</code>');t=t.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');t=t.replace(/\n/g,'<br>');return t}
-function A(t,y,i){var d=document.createElement('div');d.className='msg '+y;if(i)d.id=i;d.innerHTML=y==='agt'?M(t):t;document.getElementById('chat').appendChild(d);d.scrollIntoView({behavior:'smooth',block:'end'})}
+function A(t,y,i){var d=document.createElement('div');d.className='msg '+y;if(i)d.id=i;d.innerHTML=y==='agt'?M(t):t;document.getElementById('chat').appendChild(d);d.scrollIntoView({behavior:'smooth',block:'end'});return d}
 function S(){var t=document.getElementById('inp').value.trim();if(!t)return
  document.getElementById('inp').value='';var st=Date.now()
  document.getElementById('dot').style.background='#d29922'
@@ -70,22 +70,10 @@ function S(){var t=document.getElementById('inp').value.trim();if(!t)return
   .then(r=>r.json()).then(d=>{
    clearInterval(timer);var e2=Math.round((Date.now()-st)/1000)
    document.getElementById('dot').style.background='#3fb950';document.getElementById('status').textContent='Ready ('+e2+'s)'
-   A('<div style="font-size:calc(var(--fs)*0.65);color:#8b949e;margin-bottom:2px">Thought: '+e2+'s</div>','sys')
    if(d.error)A(d.error,'err')
-   else{A('<div style="font-size:calc(var(--fs)*0.65);color:#8b949e;margin-bottom:2px">Thought: '+e2+'s</div>','sys');A(d.response,'agt')}
+   else{A(d.response,'agt')}
+   pollUsage()
   })
-}
-function pollUsage(){
- fetch('/api/usage').then(r=>r.json()).then(d=>{
-  var t=d.tokens||0,m=d.max_tokens||65536,p=Math.round(t/m*100)
-  document.getElementById('ctxTokens').textContent=t.toLocaleString()+' tokens'
-  document.getElementById('ctxPct').textContent=p+'% of '+m.toLocaleString()
-  document.getElementById('ctxCost').textContent='¥'+(d.cost||0).toFixed(2)+' spent'
- }).catch(function(){})
-}
-function SW(m){fetch('/api/model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:m})})}
-function SM(m){fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:m})})
- document.querySelectorAll('.btn').forEach(function(b,i){b.classList.toggle('on',(m==='build'&&i===0)||(m==='plan'&&i===1))})
 }
 setInterval(async function(){
  try{var r=await fetch('/api/tasks');var d=await r.json();
