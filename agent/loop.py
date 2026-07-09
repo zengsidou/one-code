@@ -71,6 +71,15 @@ class AgentLoop:
         else:
             raise ValueError(f"Unknown llm_type: {llm_type}")
 
+        # 子任务用更便宜的 flash 模型
+        try:
+            if llm_type == "deepseek" and hasattr(self.llm, "api_key"):
+                self.llm_flash = DeepSeekAdapter(api_key=self.llm.api_key, model="deepseek-v4-flash")
+            else:
+                self.llm_flash = self.llm
+        except Exception:
+            self.llm_flash = self.llm
+
         self.registry = registry or ToolRegistry()
         self.memory = memory
         if self.memory and hasattr(self.memory, "short_term"):
@@ -84,11 +93,11 @@ class AgentLoop:
         self.observability = observability
         self._rules = rules
         self._token_opt = token_optimizer
-        self._goal_verifier = GoalVerifier(self.llm)
+        self._goal_verifier = GoalVerifier(self.llm_flash or self.llm)
         self._constraints = ConstraintEnforcer()
         self._error_count = 0
         self._max_errors = 5
-        self._orchestrator = AgentOrchestrator(self.llm, self.registry) if enable_orchestrate else None
+        self._orchestrator = AgentOrchestrator(self.llm_flash or self.llm, self.registry) if enable_orchestrate else None
         self.enable_contract_first = enable_contract_first
         self._contract_orchestrator = ContractFirstOrchestrator(self.llm) if enable_contract_first else None
         self._step_trace: list[str] = []
@@ -175,7 +184,12 @@ class AgentLoop:
             query = user_input[:200] if len(user_input) > 200 else user_input
             context = self.memory.get_context(query=query)
             system_prompt = self._build_system_prompt()
-            # 注入运行时约束提示
+            # 注入匹配的 skills
+            from agent.skills import get_skills
+            skills = get_skills()
+            matched = skills.match(user_input)
+            if matched:
+                system_prompt = skills.to_prompt(matched) + "\n" + system_prompt
             hint = self._constraints.get_constraint_hint()
             if hint:
                 system_prompt += f"\n\n[运行时约束]\n{hint}"

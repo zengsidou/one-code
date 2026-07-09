@@ -368,6 +368,19 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
             return f"{len(data)} results:\n" + "\n".join(items)
         except Exception as e:
             return f"[ERROR] LSP: {e}"
+
+    @registry.register("skill", "加载领域知识 skill。name=skill名称，留空列出所有可用")
+    def skill(name: str = "") -> str:
+        from agent.skills import get_skills
+        lib = get_skills()
+        if not name:
+            items = [f"- {s.name}: {s.description}" for s in lib.skills]
+            return f"可用 skills ({len(items)}):\n" + "\n".join(items) if items else "无可用 skill"
+        for s in lib.skills:
+            if s.name.lower() == name.lower():
+                return f"## {s.name}\n{s.body}"
+        return f"[ERROR] skill 不存在: {name}"
+
     # ━━━ 工具别名（LLM 可能用不同名称调用）━━━
     registry.add_alias("search_content", "grep")
     registry.add_alias("search_file", "grep")
