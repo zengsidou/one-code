@@ -44,7 +44,6 @@ def get_agent() -> AgentLoop:
         )
         _agent = AgentLoop(
             llm=llm, registry=registry, memory=memory, max_steps=20,
-            enable_evolution=True, enable_self_optimize=False,
         )
     return _agent
 
@@ -167,15 +166,6 @@ def _build_file_tree(base: str, path: str, depth: int) -> list[dict]:
 def status():
     agent = get_agent()
     stats = {"tools": len(agent.registry.tool_names), "running": _current_task["running"]}
-    if agent.enable_evolution:
-        try:
-            rpt = agent.get_evolution_report()
-            stats["tasks"] = rpt["growth"]["total_tasks"]
-            stats["success_rate"] = rpt["growth"]["recent_success_rate"]
-            stats["skills"] = rpt["skill_count"]
-            stats["trend"] = rpt["growth"]["trend"]
-        except Exception:
-            pass
     try:
         stats["token_count"] = agent.memory.short_term.get_token_count()
     except Exception:
@@ -187,25 +177,6 @@ def status():
 def tools():
     agent = get_agent()
     return jsonify({"tools": agent.registry.tool_names})
-
-
-@app.route("/api/grow", methods=["POST"])
-def grow():
-    agent = get_agent()
-    try:
-        plan = agent.grow()
-        return jsonify(plan)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/report", methods=["GET"])
-def report():
-    agent = get_agent()
-    try:
-        return jsonify(agent.get_evolution_report())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/clear", methods=["POST"])
@@ -281,7 +252,7 @@ def main():
     print(f"{C.C}╚{'═'*58}╝{C.W}")
 
     agent = get_agent()
-    print(f"  Agent:  就绪 | 工具: {len(agent.registry.tool_names)} | 进化: {'ON' if agent.enable_evolution else 'OFF'}")
+    print(f"  Agent:  就绪 | 工具: {len(agent.registry.tool_names)}")
     print()
 
     import webbrowser

@@ -39,13 +39,11 @@ def main():
 
     # Choose LLM backend
     llm_type = "deepseek" if os.environ.get("DEEPSEEK_API_KEY") else "ollama"
-    use_evolution = "--evo" in sys.argv or "-e" in sys.argv
-    use_optimize = "--opt" in sys.argv or "-o" in sys.argv
     use_contract = "--contract" in sys.argv or "-c" in sys.argv
 
     print(Colors.c("=" * 60, Colors.CYAN))
-    print(Colors.c("  OneCode Framework", Colors.CYAN))
-    print(Colors.c("  Agent Loop + Tool Use + Memory + Evolution", Colors.CYAN))
+    print(Colors.c("  One-Code Framework", Colors.CYAN))
+    print(Colors.c("  Agent Loop + Tool Use + Contract-First", Colors.CYAN))
     print(Colors.c("=" * 60, Colors.CYAN))
 
     registry = ToolRegistry(safe_mode=True)
@@ -67,33 +65,15 @@ def main():
 
     agent = AgentLoop(
         llm=llm, registry=registry, memory=memory, max_steps=15,
-        enable_evolution=use_evolution, enable_self_optimize=use_optimize,
         enable_contract_first=use_contract,
     )
-
-    # 检查是否是架构进化后的自重启
-    if AgentCheckpoint.has_restart_flag():
-        ckpt = AgentCheckpoint.load()
-        if ckpt:
-            AgentCheckpoint.clear_restart_flag()
-            task = ckpt.get("current_task", "")
-            reason = ckpt.get("restart_reason", "architecture_evolution")
-            print(Colors.c(f"  [RESTART] 架构进化重启: {reason}", Colors.MAGENTA))
-            print(Colors.c(f"  [RESTART] 继续执行: {task[:80]}...", Colors.MAGENTA))
-            response = agent.run(task)
-            print(f"{Colors.c(response, Colors.CYAN)}")
-            print()
 
     print(f"  LLM:       {Colors.c(model_name, Colors.BLUE)}")
     print(f"  Context:   {Colors.c(f'{short_mem.max_tokens//1024}K tokens', Colors.BLUE)}")
     print(f"  Tools:     {Colors.c(str(len(registry.tool_names)), Colors.GREEN)}")
-    print(f"  Evolution: {Colors.c('ON' if use_evolution else 'OFF', Colors.MAGENTA)}")
-    print(f"  Self-Opt:  {Colors.c('ON' if use_optimize else 'OFF', Colors.MAGENTA)}")
     print(f"  Contract:  {Colors.c('ON' if use_contract else 'OFF', Colors.MAGENTA)}")
     print(Colors.c("-" * 60, Colors.CYAN))
     print(f"  /exit     /tools   /memory   /clear")
-    if use_evolution:
-        print(f"  /grow     /report  /skills")
     print(Colors.c("-" * 60, Colors.CYAN))
     print()
 
@@ -121,32 +101,6 @@ def main():
                 print()
             elif cmd == "/clear":
                 memory.clear(); print(f"{Colors.c('记忆已清空', Colors.GREEN)}\n")
-            elif use_evolution and cmd == "/grow":
-                plan = agent.grow()
-                print(f"\n{Colors.c('成长建议:', Colors.BLUE)}")
-                sug = plan.get("suggestion", {})
-                if sug:
-                    print(f"  动作: {sug.get('action','?')} | 级别: {sug.get('current_level','?')}")
-                    print(f"  理由: {sug.get('reason','?')}")
-                for c in plan.get("challenges", [])[:3]:
-                    print(f"  [L{c.get('difficulty','?')}] {c.get('task','?')}")
-                print()
-            elif use_evolution and cmd == "/report":
-                rpt = agent.get_evolution_report()
-                g = rpt["growth"]
-                print(f"\n{Colors.c('进化报告:', Colors.BLUE)}")
-                print(f"  任务: {g['total_tasks']} | 成功率: {g['recent_success_rate']}")
-                print(f"  均效率: {g['recent_avg_efficiency']} | 趋势: {g['trend']}")
-                print(f"  技能: {rpt['skill_count']} | 弱项: {rpt['weak_areas'] or '无'}")
-                for ins in rpt.get("recent_insights", [])[:2]:
-                    print(f"  {ins[:100]}")
-                print()
-            elif use_evolution and cmd == "/skills":
-                stats = agent._skill_library.get_stats()
-                print(f"\n{Colors.c('技能库:', Colors.BLUE)}")
-                for s in stats.get("strongest", [])[:5]:
-                    print(f"  - {s['name']} (强度:{s['strength']:.1f}, 复用:{s['reinforce_count']}次)")
-                print()
             else:
                 print(f"{Colors.c('未知命令', Colors.RED)}: {cmd}\n")
             continue
