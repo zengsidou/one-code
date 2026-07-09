@@ -232,7 +232,7 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
         try:
             r = httpx.get(
                 url,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; MicroAgent/1.0)"},
+                headers={"User-Agent": "Mozilla/5.0 (compatible; OneCode/1.0)"},
                 follow_redirects=True,
                 timeout=15,
             )

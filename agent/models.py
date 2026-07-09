@@ -49,3 +49,32 @@ class StepResult:
     thought: str | None = None
     action: str | None = None
     observation: str | None = None
+
+
+@dataclass
+class Contract:
+    """多模态契约 — Agent 执行前的产物预览"""
+    type: str           # visual / dialog / code_api / config / data / narrative
+    format: str         # text / svg / mermaid / json / table / ascii
+    content: str        # 契约内容
+    summary: str        # 一句话方向总结
+
+
+@dataclass
+class ContractStep:
+    """逆向拆解后的执行步骤"""
+    index: int
+    goal: str
+    tools_hint: str
+    depends_on: list[int] = field(default_factory=list)
+    contract_checkpoint: str = ""  # 完成后对照契约哪部分验证
+
+
+@dataclass
+class ContractResult:
+    """契约先行执行的完整结果"""
+    contract: Contract | None = None
+    steps: list[ContractStep] = field(default_factory=list)
+    step_results: list[dict] = field(default_factory=list)
+    consistency_score: int = 0  # 0-5 分，最终产物与契约的一致性
+    user_confirmed: bool = False

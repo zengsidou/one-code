@@ -11,7 +11,7 @@ from .protocol import (
 
 
 class MCPServer:
-    def __init__(self, registry: ToolRegistry, name: str = "micro-agent", version: str = "0.1.0"):
+    def __init__(self, registry: ToolRegistry, name: str = "one-code", version: str = "0.1.0"):
         self.registry = registry
         self.name = name
         self.version = version

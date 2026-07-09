@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Micro-Agent MCP SSE Server
+One-Code MCP SSE Server
 启动方式: python main_mcp_sse.py
 作为 MCP SSE 服务器运行，通过 HTTP SSE 暴露工具
 """
@@ -24,7 +24,7 @@ def main():
 
     mcp_server = MCPServer(
         registry=registry,
-        name="micro-agent-mcp",
+        name="one-code-mcp",
         version="0.1.0",
     )
 

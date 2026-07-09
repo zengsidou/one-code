@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Micro-Agent 框架单元测试"""
+"""One-Code 框架单元测试"""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -101,7 +101,7 @@ def test_max_steps():
 
 
 if __name__ == "__main__":
-    print("Running Micro-Agent tests...\n")
+    print("Running One-Code tests...\n")
     test_tool_registry()
     test_tool_schema()
     test_python_type_to_json_type()

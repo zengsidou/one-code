@@ -29,7 +29,7 @@ class SubAgent:
         self.max_steps = max_steps
         self._context: list[Message] = context or []
         base_prompt = prompt or (
-            "你是 Micro-Agent 子代理，专注于执行单个子任务。"
+            "你是 One-Code 子代理，专注于执行单个子任务。"
             "使用可用工具完成任务，给出简洁结果。"
         )
         self.prompt = base_prompt + "\n\n" + RETURN_FORMAT_INSTRUCTION

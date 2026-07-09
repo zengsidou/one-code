@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Micro-Agent IDE</title>
+<title>One-Code IDE</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="sidebar">
-  <h2>Micro-Agent</h2>
+  <h2>One-Code</h2>
   <div class="stat">工具 <span id="toolCount">-</span></div>
   <div class="stat">任务 <span id="taskCount">-</span></div>
   <div class="stat">成功率 <span id="successRate">-</span></div>
@@ -24,11 +24,11 @@
 </div>
 <div class="main">
   <div class="header">
-    <span>Micro-Agent IDE &mdash; DeepSeek V4</span>
+    <span>One-Code IDE &mdash; DeepSeek V4</span>
     <span class="status idle" id="statusBadge">就绪</span>
   </div>
   <div class="chat" id="chatBox">
-    <div class="msg system">Micro-Agent IDE 已就绪。输入编程任务开始。</div>
+    <div class="msg system">One-Code IDE 已就绪。输入编程任务开始。</div>
   </div>
   <div class="input-bar">
     <input type="text" id="userInput" placeholder="输入编程任务... (Enter 发送)" onkeydown="if(event.key==='Enter') send()">

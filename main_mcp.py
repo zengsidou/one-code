@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Micro-Agent MCP Server
+One-Code MCP Server
 启动方式: python main_mcp.py
 作为 MCP stdio 服务器运行，暴露工具给 MCP 客户端
 """
@@ -24,11 +24,11 @@ def main():
 
     server = MCPServer(
         registry=registry,
-        name="micro-agent-mcp",
+        name="one-code-mcp",
         version="0.1.0",
     )
 
-    print(f"[MCP Server] micro-agent-mcp v0.1.0 — {len(registry.tool_names)} tools", file=sys.stderr)
+    print(f"[MCP Server] one-code-mcp v0.1.0 — {len(registry.tool_names)} tools", file=sys.stderr)
     print(f"[MCP Server] Tools: {', '.join(registry.tool_names)}", file=sys.stderr)
     print(f"[MCP Server] Listening on stdio...", file=sys.stderr)
 

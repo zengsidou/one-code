@@ -1,11 +1,11 @@
 @echo off
 chcp 65001 >nul
-title Micro-Agent IDE
+title One-Code IDE
 cd /d "%~dp0"
 
 echo.
 echo  ╔══════════════════════════════════════════╗
-echo  ║     Micro-Agent IDE Server              ║
+echo  ║     One-Code IDE Server                ║
 echo  ║     DeepSeek V4 Pro + L4 Self-Evolution ║
 echo  ╚══════════════════════════════════════════╝
 echo.
@@ -20,7 +20,7 @@ if %errorlevel% equ 0 (
 )
 
 REM Start IDE server
-start "Micro-Agent IDE" /MIN python ide_server.py
+start "One-Code IDE" /MIN python ide_server.py
 
 REM Wait for server to start
 echo  等待服务启动...

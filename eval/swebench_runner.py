@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""SWE-bench Lite evaluation harness for micro-agent.
+"""SWE-bench Lite evaluation harness for one-code.
 
-Runs micro-agent against SWE-bench Lite instances and reports resolution rate,
+Runs one-code against SWE-bench Lite instances and reports resolution rate,
 cost, and performance metrics.
 """
 import json
@@ -69,7 +69,7 @@ class EvalReport:
 
 
 class SWEBenchRunner:
-    """Runs micro-agent against SWE-bench Lite instances."""
+    """Runs one-code against SWE-bench Lite instances."""
 
     REPOS_DIR = Path("./eval/repos")
     RESULTS_DIR = Path("./eval/results")
@@ -198,7 +198,7 @@ class SWEBenchRunner:
             return None
 
     def build_agent(self, workspace: Path, plan_first: bool = False) -> AgentLoop:
-        """Build micro-agent with workspace-aware tools."""
+        """Build one-code with workspace-aware tools."""
         registry = ToolRegistry(safe_mode=False)
         register_builtin_tools(registry)
         self._override_tools_for_workspace(registry, workspace)
@@ -441,7 +441,7 @@ class SWEBenchRunner:
                 + output_tokens / 1e6 * self.PRICE_OUTPUT_PER_1M)
 
     def run_one(self, instance: dict) -> EvalResult:
-        """Evaluate micro-agent on a single SWE-bench instance."""
+        """Evaluate one-code on a single SWE-bench instance."""
         result = EvalResult(
             instance_id=instance["instance_id"],
             repo=instance["repo"],
@@ -623,7 +623,7 @@ class SWEBenchRunner:
 
 if __name__ == "__main__":
     import argparse
-    p = argparse.ArgumentParser(description="SWE-bench Lite evaluation for micro-agent")
+    p = argparse.ArgumentParser(description="SWE-bench Lite evaluation for one-code")
     p.add_argument("--max", type=int, default=5, help="Max instances (default: 5)")
     p.add_argument("--repo", type=str, default=None, help="Filter by repo (e.g. django/django)")
     p.add_argument("--model", type=str, default="deepseek-v4-pro")

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Micro-Agent Framework
+OneCode Framework
   Agent Loop  — ReAct 循环 + 熔断 + 回路检测
   Tool Use    — 装饰器注册 + 自动 Schema 生成
   Memory      — 64K 智能上下文窗口 + ChromaDB 长期记忆
@@ -41,9 +41,10 @@ def main():
     llm_type = "deepseek" if os.environ.get("DEEPSEEK_API_KEY") else "ollama"
     use_evolution = "--evo" in sys.argv or "-e" in sys.argv
     use_optimize = "--opt" in sys.argv or "-o" in sys.argv
+    use_contract = "--contract" in sys.argv or "-c" in sys.argv
 
     print(Colors.c("=" * 60, Colors.CYAN))
-    print(Colors.c("  Micro-Agent Framework", Colors.CYAN))
+    print(Colors.c("  OneCode Framework", Colors.CYAN))
     print(Colors.c("  Agent Loop + Tool Use + Memory + Evolution", Colors.CYAN))
     print(Colors.c("=" * 60, Colors.CYAN))
 
@@ -67,6 +68,7 @@ def main():
     agent = AgentLoop(
         llm=llm, registry=registry, memory=memory, max_steps=15,
         enable_evolution=use_evolution, enable_self_optimize=use_optimize,
+        enable_contract_first=use_contract,
     )
 
     # 检查是否是架构进化后的自重启
@@ -87,6 +89,7 @@ def main():
     print(f"  Tools:     {Colors.c(str(len(registry.tool_names)), Colors.GREEN)}")
     print(f"  Evolution: {Colors.c('ON' if use_evolution else 'OFF', Colors.MAGENTA)}")
     print(f"  Self-Opt:  {Colors.c('ON' if use_optimize else 'OFF', Colors.MAGENTA)}")
+    print(f"  Contract:  {Colors.c('ON' if use_contract else 'OFF', Colors.MAGENTA)}")
     print(Colors.c("-" * 60, Colors.CYAN))
     print(f"  /exit     /tools   /memory   /clear")
     if use_evolution:

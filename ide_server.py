@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Micro-Agent IDE Server — Flask Web 界面"""
+"""One-Code IDE Server — Flask Web 界面"""
 import os
 import sys
 import json
@@ -284,7 +284,7 @@ def _extract_files_from_result(result: str) -> list[str]:
 def main():
     port = int(os.environ.get("MICRO_AGENT_PORT", "8765"))
     print(f"{C.C}╔{'═'*58}╗{C.W}")
-    print(f"{C.C}║{C.W}  Micro-Agent IDE Server{C.C} {' ' * 32}║{C.W}")
+    print(f"{C.C}║{C.W}  One-Code IDE Server{C.C} {' ' * 32}║{C.W}")
     print(f"{C.C}║{C.W}  {C.G}http://localhost:{port}{C.W}{' ' * (46 - len(str(port)))}║{C.W}")
     print(f"{C.C}╚{'═'*58}╝{C.W}")
     print(f"  {C.Y}启动中...{C.W}")

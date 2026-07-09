@@ -1,4 +1,4 @@
-# Micro-Agent Framework
+# One-Code Framework
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org/)
@@ -47,7 +47,7 @@ graph TB
 ```
 
 ```
-micro-agent/
+one-code/
 ├── agent/                    # Agent 核心（1180 行 Agent Loop）
 │   ├── loop.py               # ReAct / Plan-then-Execute + 熔断 + 回路检测
 │   ├── orchestrator.py       # 多 Agent 编排 (fan-out / pipeline)

@@ -23,10 +23,11 @@ from agent.evolve import TaskPostMortem, SkillLibrary, AbilityProfile, Challenge
 from agent.evolve import ArchitectureBottleneckDetector, ArchitectureProposalGenerator, ArchitectureApplier, ArchitectureValidator
 from agent.orchestrator import AgentOrchestrator
 from agent.checkpoint import AgentCheckpoint
+from agent.contract_first import ContractFirstOrchestrator
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "你是 Micro-Agent，一个智能 AI 编程助手，底层模型是 DeepSeek V4 Pro。\n"
+    "你是 One-Code，一个智能 AI 编程助手，底层模型是 DeepSeek V4 Pro。\n"
     "你的知识截止于 2025 年，对于不确定的信息会用 search_web 工具查询。\n\n"
     "══════ 核心工作流（每次任务必须遵守）══════\n"
     "1. 规划: 任务开始时不调用工具，先在脑中列出：要改哪些文件、顺序、怎么验证\n"
@@ -118,6 +119,7 @@ class AgentLoop:
         enable_orchestrate: bool = False,
         loop_detect_threshold: int = 3,
         plan_first: bool = False,
+        enable_contract_first: bool = False,
         observability=None,
         rules=None,
         token_optimizer=None,
@@ -174,6 +176,8 @@ class AgentLoop:
         self._arch_applier = ArchitectureApplier() if enable_evolution else None
         self._arch_validator = ArchitectureValidator() if enable_evolution else None
         self._orchestrator = AgentOrchestrator(self.llm, self.registry) if enable_orchestrate else None
+        self.enable_contract_first = enable_contract_first
+        self._contract_orchestrator = ContractFirstOrchestrator(self.llm) if enable_contract_first else None
         self._step_trace: list[str] = []
         self._last_step_count = 0
 
@@ -218,7 +222,9 @@ class AgentLoop:
                 content="[前置指令] 先调用 search_web 搜索相关信息，找到可靠来源后用 fetch_url 读取详细内容，然后基于实际搜索结果回答。不要凭记忆编造。",
             ))
 
-        if self._plan_first:
+        if self.enable_contract_first:
+            result = self._contract_and_execute(user_input, debug)
+        elif self._plan_first:
             result = self._plan_and_execute(user_input, debug)
         else:
             result = self._run_loop(user_input, debug)
@@ -545,6 +551,44 @@ class AgentLoop:
         self.memory.add_message(Message(role="user", content=summary_prompt))
         final = self._run_loop(summary_prompt, debug)
         return final
+
+    def _contract_and_execute(self, user_input: str, debug: bool = False) -> str:
+        """契约先行模式：契约生成→确认→逆向拆解→执行
+
+        1. 自动检测契约类型 + 生成多模态预览
+        2. 用户确认或修改方向
+        3. 从契约逆向拆解执行步骤
+        4. 构建契约上下文，交给 ReAct 循环执行
+        """
+        if self._contract_orchestrator is None:
+            return self._run_loop(user_input, debug)
+
+        # Phase 1 & 2: 生成契约 + 用户确认
+        contract = self._contract_orchestrator.phase1_detect_and_generate(user_input)
+        if not self._contract_orchestrator.phase2_confirm():
+            return "[CANCELLED] 用户取消"
+
+        # Phase 3: 逆向拆解
+        steps = self._contract_orchestrator.phase3_decompose(user_input)
+
+        # Phase 4: 构建契约上下文提示并执行
+        execution_prompt = self._contract_orchestrator.phase4_build_execution_prompt(
+            user_input, contract, steps
+        )
+
+        self.memory.add_message(Message(
+            role="system",
+            content="[契约先行模式] 已生成最终产物方向预览，用户确认方向正确。请按步骤执行，每步完成后对照契约验证产出。",
+        ))
+
+        print()
+        print("  [契约先行] 方向已确认，开始执行...")
+        print()
+
+        self.memory.add_message(Message(role="user", content=execution_prompt))
+        result = self._run_loop(execution_prompt, debug)
+
+        return result
 
     def _generate_plan(self, task: str, debug: bool = False) -> list[dict] | None:
         """用 LLM 生成结构化执行计划。"""
