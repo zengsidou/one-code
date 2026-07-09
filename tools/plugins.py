@@ -1,11 +1,6 @@
 # -*- coding: utf-8 -*-
-"""工具插件系统 — 从配置目录自动发现和加载自定义工具
-
-对标 MiMo Code: ~/.mimocode/tools/*.ts
-One-Code:  ~/.onecode/tools/*.py
-
-每个 .py 文件 export 一个 `register(registry)` 函数。
-"""
+"""工具插件系统 — 从配置目录自动发现和加载自定义工具"""
+import os
 import importlib.util
 from pathlib import Path
 
