@@ -123,7 +123,7 @@ class AgentLoop:
                     ("read_file", "grep", "glob", "list_dir", "lsp", "calculate")]
         return self.registry.get_schemas()
 
-    def run(self, user_input: str, debug: bool = False, boot_context: list[Message] | None = None) -> str:
+    def run(self, user_input: str, debug: bool = False, boot_context: list[Message] | None = None, stream_cb=None) -> str:
         if AgentCheckpoint.has_restart_flag():
             AgentCheckpoint.clear_restart_flag()
             ckpt = AgentCheckpoint.load()
@@ -164,7 +164,7 @@ class AgentLoop:
         elif self._plan_first:
             result = self._plan_and_execute(user_input, debug)
         else:
-            result = self._run_loop(user_input, debug)
+            result = self._run_loop(user_input, debug, stream_cb)
 
         if "[RESTART]" in result:
             return result
@@ -182,13 +182,11 @@ class AgentLoop:
 
         return result
 
-    def _run_loop(self, user_input: str, debug: bool = False) -> str:
+    def _run_loop(self, user_input: str, debug: bool = False, stream_cb=None) -> str:
         """内部执行循环，返回结果或 [STOPPED] 错误"""
         self._error_count = 0
         self._tool_fingerprints.clear()
-
-        step = 0
-        idle_steps = 0
+        step = 0; idle_steps = 0
         while True:
             step += 1
             if debug:
@@ -247,7 +245,7 @@ class AgentLoop:
                     ),
                 ))
 
-            # 流式生成 — 优先流式输出，回退到非流式
+            # 生成回复 — 支持流式回调
             try:
                 response = self.llm.generate(context, tools=self.get_active_schemas())
             except Exception:

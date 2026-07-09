@@ -113,6 +113,35 @@ def chat():
     return jsonify({"response": result})
 
 
+@app.route("/api/chat/stream", methods=["POST"])
+def chat_stream():
+    from flask import Response
+    import time as _time, threading
+
+    data = request.get_json()
+    user_input = data.get("message", "").strip()
+    if not user_input:
+        return jsonify({"error": "Empty message"}), 400
+
+    agent = get_agent()
+    for msg in _build_context():
+        agent.memory.add_message(msg)
+
+    def generate():
+        result = ""
+        try:
+            result = agent.run(user_input)
+            # Stream response character by character
+            for ch in result:
+                yield f"data: {json.dumps({'text': ch})}\n\n"
+                _time.sleep(0.005)
+            yield f"data: {json.dumps({'done': True, 'response': result})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return Response(generate(), mimetype="text/event-stream")
+
+
 @sock.route("/ws/chat")
 def chat_ws(ws):
     import time as _time

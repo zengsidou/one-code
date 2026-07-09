@@ -66,16 +66,27 @@ function S(){var t=document.getElementById('inp').value.trim();if(!t)return
  document.getElementById('status').textContent='Thinking...'
  var timer=setInterval(function(){document.getElementById('status').textContent='Thinking... ('+Math.round((Date.now()-st)/1000)+'s)'},500)
  A('<b>'+E(t)+'</b>','usr')
- fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:t})})
-  .then(r=>r.json()).then(d=>{
-   clearInterval(timer);var elapsed=Math.round((Date.now()-st)/1000)
-   document.getElementById('dot').style.background='#3fb950'
-   document.getElementById('status').textContent='Ready'
-   if(d.error)A(d.error,'err')
-    else{
-     var el=A('<div style="font-size:calc(var(--fs)*0.65);color:#8b949e;margin-bottom:2px">Thought: '+elapsed+'s</div>','sys')
-     A(d.response,'agt')
-    }
+ // SSE streaming
+ var buf='';var el=null
+ fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:t})}).then(r=>{
+  var reader=r.body.getReader();var decoder=new TextDecoder()
+  function pump(){reader.read().then(function(done,value){
+   if(done.done)return
+   var lines=decoder.decode(done.value||new Uint8Array(),{stream:true}).split('\n')
+   lines.forEach(function(line){
+    if(!line.startsWith('data: '))return
+    try{var d=JSON.parse(line.slice(6))
+     if(d.text){buf+=d.text;if(!el)el=A('','agt','stream');el.innerHTML=M(buf);el.scrollIntoView({behavior:'smooth',block:'end'})}
+     else if(d.done){clearInterval(timer);var elapsed=Math.round((Date.now()-st)/1000)
+      document.getElementById('dot').style.background='#3fb950';document.getElementById('status').textContent='Ready'
+      A('<div style="font-size:calc(var(--fs)*0.65);color:#8b949e;margin-bottom:2px">Thought: '+elapsed+'s</div>','sys')
+      pollUsage()
+     }else if(d.error){clearInterval(timer);A(d.error,'err')}
+    }catch(e){}
+   })
+   pump()
+  })};pump()
+ })
    pollUsage()
    })
 }
