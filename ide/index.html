@@ -66,21 +66,16 @@ function S(){var t=document.getElementById('inp').value.trim();if(!t)return
  document.getElementById('status').textContent='Thinking...'
  var timer=setInterval(function(){document.getElementById('status').textContent='Thinking... ('+Math.round((Date.now()-st)/1000)+'s)'},500)
  A('<b>'+E(t)+'</b>','usr')
- var ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws/chat')
- var buf='';var thinking=document.getElementById('think')
- ws.onmessage=function(e){
-  var d=JSON.parse(e.data)
-  if(d.type==='text'){buf+=d.text
-   var el=document.getElementById('stream');if(!el){el=A('','agt','stream')}
-   el.innerHTML=M(buf);el.scrollIntoView({behavior:'smooth',block:'end'})
-  }else if(d.type==='done'){
+ fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:t})})
+  .then(r=>r.json()).then(d=>{
    clearInterval(timer);var elapsed=Math.round((Date.now()-st)/1000)
    document.getElementById('dot').style.background='#3fb950'
-   document.getElementById('status').textContent='Done ('+elapsed+'s)'
-   var el=document.getElementById('stream');if(el){el.innerHTML=M(buf);el.innerHTML+='<div style="font-size:calc(var(--fs)*0.65);color:#8b949e;margin-top:4px">Thought: '+elapsed+'s · <span id="ctxT">-</span> tokens · ¥<span id="ctxC">-</span></div>'}
-   ws.close();pollUsage()
-  }else if(d.type==='error'){clearInterval(timer);A(d.text,'err');ws.close()}
- }
+   document.getElementById('status').textContent='Ready'
+   if(d.error)A(d.error,'err')
+   else A('<div style="font-size:calc(var(--fs)*0.65);color:#8b949e;margin-bottom:2px">Thought: '+elapsed+'s</div>'+d.response,'agt')
+   pollUsage()
+  })
+}
  ws.onopen=function(){ws.send(JSON.stringify({message:t}))}
 }
 function pollUsage(){
