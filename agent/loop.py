@@ -22,6 +22,19 @@ from agent.constraints import ConstraintEnforcer
 from agent.hooks import get_hooks
 
 
+def _safe_stdout(text: str) -> None:
+    """Write to stdout without crashing on Windows GBK consoles."""
+    if not text:
+        return
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+        sys.stdout.buffer.write(text.encode(enc, errors="replace"))
+        sys.stdout.flush()
+
+
 DEFAULT_SYSTEM_PROMPT = (
     "你是 One-Code，一个 AI 编程助手，可以通过工具调用来读写文件、执行命令、搜索代码。\n\n"
     "══════ 工作流 ══════\n"
@@ -255,8 +268,7 @@ class AgentLoop:
 
             # 流式输出思考内容 (reasoning_content)
             if getattr(response, "reasoning_content", ""):
-                sys.stdout.write(response.reasoning_content)
-                sys.stdout.flush()
+                _safe_stdout(response.reasoning_content)
 
             if tool_calls:
                 if self._detect_tool_loop(tool_calls, debug):
@@ -318,8 +330,7 @@ class AgentLoop:
             # 无工具调用 — 输出回答
             idle_steps += 1
             if content.strip():
-                sys.stdout.write(content)
-                sys.stdout.flush()
+                _safe_stdout(content)
             print()
 
             if idle_steps >= 2 or step >= self.max_steps:

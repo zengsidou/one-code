@@ -46,4 +46,4 @@ one-code-desktop = "ide_desktop:main"
 py-modules = ["main", "ide_server", "ide_desktop"]
 
 [tool.setuptools.packages.find]
-include = ["agent*", "llm*", "memory*", "tools*", "sandbox*", "ide*"]
+include = ["agent*", "llm*", "memory*", "tools*", "sandbox*", "ide*", "eval*"]

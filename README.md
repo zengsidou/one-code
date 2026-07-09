@@ -88,6 +88,25 @@ python -m pytest tests/ -q
 
 ---
 
+## 契约先行（Contract-First）
+
+产品原则与求职精简稿：[`docs/contract-first-job-brief.md`](docs/contract-first-job-brief.md)
+
+5 任务对照实验协议 + runner：
+
+```bash
+# 需 DEEPSEEK_API_KEY
+python -m eval.contract_first.run --mode contract --task-id T1
+python -m eval.contract_first.run --mode all --task-id T1
+```
+
+详见 [`docs/contract-first-experiment.md`](docs/contract-first-experiment.md)。  
+最新一次自动跑批结果：[`docs/contract-first-results.md`](docs/contract-first-results.md)。
+
+完整论述（proposal）：https://zengsidou.github.io/papers/contract-first-paper.pdf
+
+---
+
 ## License
 
 Apache 2.0

@@ -26,6 +26,8 @@ test_diag.json
 eval/repos/
 eval/eval_memory_db/
 eval/results/
+eval/contract_first/results/
+eval/contract_first/workspaces/
 AGENTS.md
 ci/reports/
 ci/latest.json

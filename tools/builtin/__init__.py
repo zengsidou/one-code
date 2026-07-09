@@ -163,6 +163,10 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
 
     @registry.register("write_file", "写入内容到指定路径的文件")
     def write_file(path: str, content: str) -> str:
+        if not path or not isinstance(path, str):
+            return "[ERROR] Write file failed: path is required"
+        if content is None:
+            return "[ERROR] Write file failed: content is required"
         try:
             os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
@@ -190,8 +194,23 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
 
     @registry.register("run_shell", "执行 Shell 命令。command=命令, timeout=超时秒数, description=简短描述用途(5-10词)")
     def _run_shell(command: str, timeout: int = 30, description: str = "") -> str:
+        try:
+            timeout = int(timeout)
+        except Exception:
+            timeout = 30
+        timeout = max(5, min(timeout, 60))
+        # Block obvious long-lived servers in agent loops
+        low = (command or "").lower()
+        if any(x in low for x in ("flask run", "uvicorn", "gunicorn", "app.run(", "http.server")) and "timeout" not in low:
+            return "[ERROR] Refusing long-lived server command in agent loop. Implement callable APIs/files instead, or use a bounded one-shot test."
         if sandbox:
-            result = sandbox.execute(command)
+            # honor per-call timeout when sandbox is used
+            old = sandbox.policy.max_runtime_seconds
+            sandbox.policy.max_runtime_seconds = timeout
+            try:
+                result = sandbox.execute(command)
+            finally:
+                sandbox.policy.max_runtime_seconds = old
             if result["ok"]:
                 out = result["output"]
                 if result["error"]:

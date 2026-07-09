@@ -75,9 +75,12 @@ class ToolRegistry:
             sig = inspect.signature(func)
             cleaned = {}
             for pname, param in sig.parameters.items():
-                val = arguments.get(pname, param.default if param.default is not inspect.Parameter.empty else None)
-                if val is inspect.Parameter.empty or val is None:
-                    cleaned[pname] = val
+                has_default = param.default is not inspect.Parameter.empty
+                val = arguments.get(pname, param.default if has_default else None)
+                if val is None and not has_default:
+                    return f"[ERROR] Missing required parameter: {pname}"
+                if val is None:
+                    cleaned[pname] = None
                     continue
                 anno = param.annotation
                 if anno is not inspect.Parameter.empty:

@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "max_steps": 15,
+  "tasks": [
+    {
+      "id": "T1",
+      "type": "visual",
+      "title": "产品介绍落地页",
+      "prompt": "在当前目录创建一个简洁的产品介绍落地页 index.html（可内联 CSS）：顶部导航、中间英雄区（标题+副标题+主按钮）、三列特性、底部 CTA。不要做成极简空白风，信息要满一些但仍克制。",
+      "success_criteria": [
+        "存在 index.html",
+        "能看出导航 / 英雄区 / 三列 / 底部 CTA 四段结构",
+        "不是几乎空白的单标题页"
+      ]
+    },
+    {
+      "id": "T2",
+      "type": "code_api",
+      "title": "Todo REST 模块",
+      "prompt": "在当前目录实现一个最小 Todo REST 模块（纯 Python 标准库即可，不要用 Flask、不要 pip install、不要启动常驻 HTTP 服务）：提供 list / create / complete 三个函数或可导入的 API；附带简短架构说明（可用 mermaid 或文字）。不要做前端，不要后台跑 server。",
+      "success_criteria": [
+        "能定位到三个接口的实现（函数或路由定义）",
+        "有模块/架构说明文件或注释块",
+        "create 与 complete 语义可区分",
+        "未要求启动常驻服务即可验收"
+      ]
+    },
+    {
+      "id": "T3",
+      "type": "dialog",
+      "title": "售后客服对话策略",
+      "prompt": "设计一个售后客服对话 Agent 的策略文档：先安抚情绪，再收集订单与故障信息排查，仍无法解决则升级人工。输出示例对话 4–6 轮 + 规则要点。保存为 customer_support_bot.md。",
+      "success_criteria": [
+        "示例对话包含安抚 → 排查 → 升级（或明确升级条件）",
+        "语气偏专业克制而非过度热情",
+        "有可执行的规则要点"
+      ]
+    },
+    {
+      "id": "T4",
+      "type": "data",
+      "title": "流失分析框架",
+      "prompt": "假设有一份销售 CSV（字段：user_id, region, plan, last_active_days, tickets）。不要编造具体统计数字。请输出流失分析框架：分析维度表 + 一句话结论方向。不要把「竞品影响」作为主维度。保存为 churn_framework.md。",
+      "success_criteria": [
+        "有维度表或等价列表",
+        "有一句话结论方向",
+        "主维度不含竞品影响"
+      ]
+    },
+    {
+      "id": "T5",
+      "type": "narrative",
+      "title": "契约先行 README 小节",
+      "prompt": "为 One-Code 写 README 中「契约先行」小节的大纲（3–5 节）+ 两段语气样本（工程说明体，不要营销腔）。保存为 contract_first_readme_section.md。",
+      "success_criteria": [
+        "大纲 3–5 节",
+        "有语气样本",
+        "整体偏工程说明而非广告文案"
+      ]
+    }
+  ]
+}
