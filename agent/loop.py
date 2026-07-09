@@ -18,6 +18,7 @@ from agent.checkpoint import AgentCheckpoint
 from agent.contract_first import ContractFirstOrchestrator
 from agent.goal_verifier import GoalVerifier
 from agent.constraints import ConstraintEnforcer
+from agent.hooks import get_hooks
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -169,6 +170,8 @@ class AgentLoop:
         if self.observability:
             self.observability.start_run(user_input, "plan_execute" if self._plan_first else "react")
 
+        get_hooks().fire("agent.start", task=user_input)
+
         search_triggers = ["搜索", "查一下", "查查", "查", "search", "最新",
                           "教程", "文档", "官方", "是什么", "什么是", "有哪些",
                           "介绍一下", "fetch"]
@@ -287,7 +290,7 @@ class AgentLoop:
                     if self.observability:
                         self.observability.trace_tool_start(step, tc.name, tc.arguments)
                     result = self.registry.execute(tc.name, tc.arguments)
-                    # ━━━ 约束检查 ━━━
+                    get_hooks().fire("tool.after", name=tc.name, args=tc.arguments, result=result)
                     constraint_hint = self._constraints.after_tool_call(
                         tc.name, tc.arguments, result,
                         self.memory.short_term.get_messages(),
@@ -379,60 +382,6 @@ class AgentLoop:
         self.memory.short_term.add(Message(role="user", content=current_task))
         return self.memory.short_term.get_messages()
 
-    def _garbage_collect(self, workspace: str | None = None) -> None:
-        """清理 Agent 运行时生成的冗余产物（对标 OpenAI 的后台清理 Agent）。
-
-        清理内容: 临时文件、.pyc 缓存、超过 10 次运行的观测数据。
-        """
-        import glob as _glob
-        ws = workspace or "."
-        patterns = ["*.tmp", "*.bak", "*.py-generated", "__pycache__/**"]
-        removed = 0
-        for pattern in patterns:
-            for f in _glob.glob(f"{ws}/{pattern}", recursive=True):
-                try:
-                    if os.path.isfile(f):
-                        os.remove(f)
-                        removed += 1
-                    elif os.path.isdir(f):
-                        shutil.rmtree(f, ignore_errors=True)
-                        removed += 1
-                except Exception:
-                    pass
-
-        if self.observability:
-            history = self.observability.load_history()
-            if len(history) > 10:
-                # Keep only last 10
-                for old in history[:-10]:
-                    path = self.observability.save_dir / f"{old.get('run_id', 'old')}.json"
-                    if path.exists():
-                        try:
-                            os.remove(path)
-                        except Exception:
-                            pass
-
-        if removed and self.observability:
-            print(f"  [GC] 清理了 {removed} 个冗余文件")
-
-    def _build_system_prompt(self) -> str:
-        if not hasattr(self, "_cached_tool_desc"):
-            self._cached_tool_desc = self.registry.get_tools_description()
-        tool_desc = self._cached_tool_desc
-        base = (
-            f"{self.system_prompt}\n\n"
-            "---\n"
-            f"可用工具:\n{tool_desc}\n\n"
-            "工具调用时输出严格 JSON: "
-            '{"tool": "工具名", "arguments": {"参数名": "参数值"}}'
-        )
-        if self._rules:
-            rules_hint = self._rules.inject_rules()
-            if rules_hint:
-                base += rules_hint
-        return base
-
-    def _plan_and_execute(self, user_input: str, debug: bool = False) -> str:
         """Plan-then-Execute 模式：先规划再执行。
 
         1. Plan phase：LLM 生成结构化执行计划
@@ -578,89 +527,16 @@ class AgentLoop:
                 return True
         return False
 
-    def _force_summarize(self) -> str:
-        msgs = self.memory.short_term.get_messages()
-        # Find the most recent tool result and user query
-        tool_results = []
-        user_query = ""
-        for i in range(len(msgs) - 1, -1, -1):
-            if msgs[i].role == "tool" and msgs[i].content and not msgs[i].content.startswith("[ERROR]"):
-                tool_results.insert(0, msgs[i].content)
-            if msgs[i].role == "user" and not user_query:
-                user_query = msgs[i].content or ""
-        if not tool_results:
-            return ""
-        result_text = "\n\n".join(tool_results)
-        # For small models, if result is short enough, return directly
-        if len(result_text) < 600:
-            return f"查询「{user_query}」的结果:\n{result_text}"
-        # Otherwise, truncate and summarize via LLM
-        return self._summarize_result(user_query, result_text[:1500])
-
-    def _summarize_result(self, query: str, result: str) -> str:
-        prompt = [
-            Message(role="system", content="用户的问题是: " + query),
-            Message(role="system", content="工具返回了以下结果。请用中文简洁总结给用户。"),
-            Message(role="user", content=result),
-        ]
-        try:
-            resp = self.llm.generate(prompt, tools=None)
-            return resp.content or result
-        except Exception:
-            return result
-
-    def decompose_and_run(self, task: str, max_subtasks: int = 4) -> str:
-        """将复杂任务拆解为子任务，并行执行后合并结果
-
-        用于突破单 Agent 处理大规模任务的瓶颈。
-        """
-        if not self._orchestrator:
-            return "[ERROR] Orchestrator 未启用 (enable_orchestrate=False)"
-
-        # 用 LLM 拆解任务
-        decompose_prompt = [
-            Message(role="system", content="将以下任务拆解为几个独立的子任务。只输出 JSON 数组，每个元素是 {\"task\": \"描述\"}。"),
-            Message(role="user", content=f"任务: {task}\n拆成最多 {max_subtasks} 个子任务。"),
-        ]
-        try:
-            resp = self.llm.generate(decompose_prompt, tools=None)
-            subtasks = self._parse_subtasks(resp.content or "")
-        except Exception:
-            return f"[ERROR] 任务拆解失败"
-
-        if not subtasks:
-            return f"[ERROR] 无法拆解任务"
-
-        # 并行执行（传入写文件工具）
-        results = self._orchestrator.fan_out(
-            subtasks,
-            tool_allowlist=["read_file", "write_file", "list_dir", "run_shell", "calculate"],
+    def _build_system_prompt(self) -> str:
+        base = self.system_prompt + "\n\n" + (
+            "工具调用时输出严格 JSON: "
+            '{"tool": "工具名", "arguments": {"参数名": "参数值"}}'
         )
-
-        # 合并结果
-        parts = []
-        for r in results:
-            if r.get("error"):
-                parts.append(f"[FAIL] {r['task'][:60]}: {r['error'][:100]}")
-            else:
-                parts.append(f"[OK] {r['task'][:60]}: {r['result'][:200]}")
-
-        return f"拆解为 {len(subtasks)} 个子任务并行执行:\n" + "\n".join(parts)
-
-    @staticmethod
-    def _parse_subtasks(text: str) -> list[dict]:
-        import json
-        text = text.strip()
-        if text.startswith("```"): text = text.split("\n",1)[-1].rsplit("```",1)[0]
-        try:
-            data = json.loads(text)
-            if isinstance(data, list):
-                return data
-            if isinstance(data, dict) and "subtasks" in data:
-                return data["subtasks"]
-        except json.JSONDecodeError:
-            pass
-        return []
+        if self._rules:
+            rules_hint = self._rules.to_prompt_hint()
+            if rules_hint:
+                base += "\n\n" + rules_hint
+        return base
 
     def _restore_from_checkpoint(self, ckpt: dict):
         """从检查点恢复状态"""

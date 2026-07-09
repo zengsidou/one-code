@@ -51,17 +51,6 @@ class SafeExecutor:
                 result["error"] = f"[BLOCKED] Network access disabled"
                 return result
 
-        if not self.policy.allow_network:
-            has_network = any(
-                kw in command.lower()
-                for kw in ["curl ", "wget ", "nc ", "ncat ", "ping ", "traceroute", "ssh ", "scp ", "ftp "]
-            )
-            if has_network:
-                result["ok"] = False
-                result["blocked_by"] = "Network access disabled by policy"
-                result["error"] = f"[BLOCKED] Network access disabled"
-                return result
-
         shell_cmd = self._build_command(command)
 
         start = time.time()

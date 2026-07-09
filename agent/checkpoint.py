@@ -31,14 +31,7 @@ class AgentCheckpoint:
             "timestamp": datetime.now().isoformat(),
             "restart_reason": restart_reason,
             "current_task": current_task,
-            "self_optimize_retry_count": agent_loop._self_optimize_retry_count,
-            "meta_optimize_count": agent_loop._meta_optimize_count,
-            "last_step_count": agent_loop._last_step_count if hasattr(agent_loop, "_last_step_count") else 0,
-            "enable_evolution": agent_loop.enable_evolution,
-            "enable_self_optimize": agent_loop.enable_self_optimize,
-            "skill_library_file": agent_loop._skill_library.filepath if agent_loop._skill_library else "",
-            "ability_profile_file": agent_loop._ability_profile.filepath if agent_loop._ability_profile else "",
-            "fix_history_file": agent_loop._fix_history.filepath if agent_loop._fix_history else "",
+            "last_step_count": getattr(agent_loop, "_last_step_count", 0),
             "system_prompt": agent_loop.system_prompt[:500],
         }
 

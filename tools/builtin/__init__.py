@@ -160,8 +160,6 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
             return raw[:3000] if raw.strip() else "(无输出)"
         except Exception as e:
             return f"[ERROR] git {action} 失败: {e}"
-        except Exception as e:
-            return f"[ERROR] 写入文件失败: {e}"
 
     @registry.register("write_file", "写入内容到指定路径的文件")
     def write_file(path: str, content: str) -> str:
@@ -225,37 +223,6 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
                     lines.append(f"{i}. {r.get('title','')[:80]}\n   {r.get('href','')}\n   {r.get('body','')[:200]}")
                 return "\n".join(lines)
         except ImportError:
-            pass
-
-        # Bing 搜索（主方案，国内稳定）
-        try:
-            import httpx
-            r = httpx.get(
-                "https://cn.bing.com/search",
-                params={"q": query, "setlang": "zh-cn"},
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-                follow_redirects=True, timeout=5,
-            )
-            if r.status_code == 200:
-                # 提取搜索结果
-                results = []
-                blocks = re.split(r'<li class="b_algo"', r.text)
-                for block in blocks[1:6]:
-                    title_m = re.search(r'<a[^>]*href="(https?://[^"]+)"[^>]*>(.+?)</a>', block)
-                    if title_m:
-                        url = title_m.group(1)
-                        title = re.sub(r'<[^>]+>', '', title_m.group(2)).strip()
-                        snippet_m = re.search(r'<p[^>]*>(.+?)</p>', block, re.DOTALL)
-                        snippet = re.sub(r'<[^>]+>', '', snippet_m.group(1)).strip()[:200] if snippet_m else ""
-                        results.append((title, url, snippet))
-                if results:
-                    lines = [f"Bing 搜索 '{query}':"]
-                    for i, (title, url, snippet) in enumerate(results[:5], 1):
-                        lines.append(f"{i}. {title}\n   {url}\n   {snippet}")
-                    return "\n".join(lines)
-        except ImportError:
-            pass
-        except Exception:
             pass
 
         # Tavily 备用
@@ -330,12 +297,15 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
         except Exception as e:
             return f"[ERROR] {e}"
 
-    @registry.register("calculate", "执行数学计算，支持加减乘除、幂运算、三角函数等")
+    @registry.register("calculate", "安全执行数学表达式。支持 +-*/**%// 和 math 模块函数")
     def calculate(expression: str) -> str:
+        import ast
         import math
-        allowed = {"__builtins__": {}, **{k: getattr(math, k) for k in dir(math) if not k.startswith("_")}}
         try:
-            result = eval(expression, allowed)
+            node = ast.parse(expression.strip(), mode="eval")
+            allowed = {"__builtins__": {}, **{k: getattr(math, k) for k in dir(math) if not k.startswith("_")}}
+            code = compile(node, "<calc>", "eval")
+            result = eval(code, allowed)
             return f"计算结果: {expression} = {result}"
         except Exception as e:
             return f"[ERROR] 计算失败: {e}"
@@ -376,76 +346,42 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
         except Exception as e:
             return f"[ERROR] SubAgent 执行失败: {e}"
 
-    @registry.register("lsp_def", "跳转到变量/函数/类的定义位置。参数: file=文件路径, line=行号, col=列号")
-    def lsp_def(file: str, line: int = 1, col: int = 1) -> str:
+    @registry.register("lsp", "代码智能: action=def/jump/refs/references/hover/diag/diagnostics/impact/analyze")
+    def lsp(file: str, action: str = "def", line: int = 1, col: int = 1) -> str:
         from tools.lsp_client import get_lsp
+        am = {"def": "go_to_definition", "jump": "go_to_definition",
+              "refs": "find_references", "references": "find_references",
+              "hover": "hover", "diag": "diagnostics", "diagnostics": "diagnostics",
+              "impact": "impact_analysis", "analyze": "impact_analysis"}
+        method = am.get(action)
+        if not method:
+            return f"[ERROR] unknown action: {action}, use def/refs/hover/diag/impact"
         try:
-            defs = get_lsp().go_to_definition(file, line, col)
+            c = get_lsp(); fn = getattr(c, method)
+            if method in ("hover",):
+                return str(fn(file, line, col))[:1000]
+            if method == "diagnostics":
+                diags = fn(file)
+                if not diags: return f"{file}: no issues"
+                ls = []; sv = {1: "ERR", 2: "WARN", 3: "INFO", 4: "HINT"}
+                for d in diags[:15]:
+                    ls.append(f"  {file}:{d['line']}:{d['col']} [{sv.get(d['severity'],'?')}] {d['message']}")
+                return "\n".join([f"{file}: {len(diags)} diagnostics"] + ls)
+            if method == "impact_analysis":
+                a = fn(file); syms = a.get("symbols", [])
+                if not syms: return f"{file}: no cross-file refs"
+                ls = [f"{file}: {len(syms)} symbols referenced:"]
+                for s in syms[:8]:
+                    rf = list(set(r["file"] for r in s["refs"]))
+                    ls.append(f"  {s['name']}(:{s['line']}) -> {len(rf)} files")
+                    for f_ in rf[:3]: ls.append(f"    - {f_}")
+                return "\n".join(ls)
+            data = fn(file, line, col)
+            if not data: return f"no results for {file}:{line}:{col}"
+            items = [f"{r['file']}:{r['line']}:{r['col']}" for r in data[:10]]
+            return f"{len(data)} results:\n" + "\n".join(items)
         except Exception as e:
-            return f"[ERROR] LSP 未就绪: {e}\n提示: pip install python-lsp-server"
-        if not defs:
-            return f"未找到 {file}:{line}:{col} 的定义"
-        return "\n".join(f"{d['file']}:{d['line']}:{d['col']}" for d in defs[:5])
-
-    @registry.register("lsp_refs", "查找变量/函数/类的所有引用位置。参数: file=文件路径, line=行号, col=列号")
-    def lsp_refs(file: str, line: int = 1, col: int = 1) -> str:
-        from tools.lsp_client import get_lsp
-        try:
-            refs = get_lsp().find_references(file, line, col)
-        except Exception as e:
-            return f"[ERROR] LSP 未就绪: {e}"
-        if not refs:
-            return f"未找到 {file}:{line}:{col} 的引用"
-        lines = [f"{r['file']}:{r['line']}:{r['col']}" for r in refs[:10]]
-        return f"{len(refs)} 处引用:\n" + "\n".join(lines)
-
-    @registry.register("lsp_hover", "查看代码元素的类型签名和文档。参数: file=文件路径, line=行号, col=列号")
-    def lsp_hover(file: str, line: int = 1, col: int = 1) -> str:
-        from tools.lsp_client import get_lsp
-        try:
-            info = get_lsp().hover(file, line, col)
-        except Exception as e:
-            return f"[ERROR] LSP 未就绪: {e}"
-        return info[:1000]
-
-    @registry.register("lsp_diag", "获取文件的诊断信息（语法错误、类型警告）。参数: file=文件路径")
-    def lsp_diag(file: str) -> str:
-        from tools.lsp_client import get_lsp
-        try:
-            diags = get_lsp().diagnostics(file)
-        except Exception as e:
-            return f"[ERROR] LSP 未就绪: {e}"
-        if not diags:
-            return f"{file}: 无诊断问题"
-        lines = []
-        for d in diags[:15]:
-            sev = {1: "ERR", 2: "WARN", 3: "INFO", 4: "HINT"}.get(d["severity"], "?")
-            lines.append(f"  {file}:{d['line']}:{d['col']} [{sev}] {d['message']}")
-        return f"{file}: {len(diags)} 项诊断\n" + "\n".join(lines)
-
-    @registry.register("lsp_impact", "跨文件影响分析。修改文件前，查看有哪些其他文件依赖了它。参数: file=文件路径")
-    def lsp_impact(file: str) -> str:
-        from tools.lsp_client import get_lsp
-        try:
-            analysis = get_lsp().impact_analysis(file)
-        except Exception as e:
-            return f"[ERROR] LSP 未就绪: {e}"
-        symbols = analysis.get("symbols", [])
-        if not symbols:
-            return f"{file}: 无跨文件引用（修改安全）"
-        lines = [f"{file}: {len(symbols)} 个符号被跨文件引用:"]
-        for s in symbols[:8]:
-            ref_files = list(set(r["file"] for r in s["refs"]))
-            lines.append(f"  {s['name']} (行{s['line']}) → 被 {len(ref_files)} 个文件引用")
-            for rf in ref_files[:3]:
-                lines.append(f"    - {rf}")
-        return "\n".join(lines)
-
-    @registry.register("apply_patch", "应用多文件结构化补丁。输入JSON数组:[{action:add|update|delete|move,file:路径,...}]。全部预检通过后原子写入，失败全回滚")
-    def apply_patch(patch: str) -> str:
-        from tools.apply_patch import apply_patch as do_patch
-        return do_patch(patch)
-
+            return f"[ERROR] LSP: {e}"
     # ━━━ 工具别名（LLM 可能用不同名称调用）━━━
     registry.add_alias("search_content", "grep")
     registry.add_alias("search_file", "grep")
@@ -460,5 +396,7 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
     registry.add_alias("rm", "delete_file")
     registry.add_alias("rename", "rename_file")
     registry.add_alias("mv", "rename_file")
-    registry.add_alias("goto_def", "lsp_def")
-    registry.add_alias("find_refs", "lsp_refs")
+    registry.add_alias("lsp_def", "lsp")
+    registry.add_alias("lsp_refs", "lsp")
+    registry.add_alias("goto_def", "lsp")
+    registry.add_alias("find_refs", "lsp")

@@ -11,6 +11,7 @@ import sys, os
 
 from tools.registry import ToolRegistry
 from tools.builtin import register_builtin_tools
+from tools.plugins import load_plugin_tools
 from memory.short_term import ShortTermMemory
 from memory.long_term import LongTermMemory
 from memory import MemoryManager
@@ -59,6 +60,7 @@ def main():
         model_name = llm.model
 
     register_builtin_tools(registry, sandbox=sandbox, llm=llm)
+    load_plugin_tools(registry)
     short_mem = ShortTermMemory()
     long_mem = LongTermMemory(llm, persist_dir="./chroma_data")
     memory = MemoryManager(short=short_mem, long=long_mem)

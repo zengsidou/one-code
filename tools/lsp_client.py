@@ -239,21 +239,6 @@ class LSPClient:
         return result
 
     def close(self):
-            })
-            resp = self._call("textDocument/diagnostic", {
-                "textDocument": {"uri": uri}
-            }, timeout=3)
-            if resp and "result" in resp:
-                items = resp["result"].get("items", [])
-                return [{
-                    "line": i.get("range", {}).get("start", {}).get("line", 0) + 1,
-                    "col": i.get("range", {}).get("start", {}).get("character", 0) + 1,
-                    "severity": i.get("severity", 3),
-                    "message": i.get("message", "")[:200],
-                } for i in items]
-        return []
-
-    def close(self):
         with self._lock:
             if self._proc:
                 try:
