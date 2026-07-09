@@ -423,6 +423,11 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
             lines.append(f"  {file}:{d['line']}:{d['col']} [{sev}] {d['message']}")
         return f"{file}: {len(diags)} 项诊断\n" + "\n".join(lines)
 
+    @registry.register("apply_patch", "应用多文件结构化补丁。输入JSON数组:[{action:add|update|delete|move,file:路径,...}]。全部预检通过后原子写入，失败全回滚")
+    def apply_patch(patch: str) -> str:
+        from tools.apply_patch import apply_patch as do_patch
+        return do_patch(patch)
+
     # ━━━ 工具别名（LLM 可能用不同名称调用）━━━
     registry.add_alias("search_content", "grep")
     registry.add_alias("search_file", "grep")

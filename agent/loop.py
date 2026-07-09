@@ -24,6 +24,7 @@ from agent.evolve import ArchitectureBottleneckDetector, ArchitectureProposalGen
 from agent.orchestrator import AgentOrchestrator
 from agent.checkpoint import AgentCheckpoint
 from agent.contract_first import ContractFirstOrchestrator
+from agent.goal_verifier import GoalVerifier
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -147,6 +148,7 @@ class AgentLoop:
         self.observability = observability
         self._rules = rules
         self._token_opt = token_optimizer
+        self._goal_verifier = GoalVerifier(self.llm)
         self._error_count = 0
         self._max_errors = 5
 
@@ -242,6 +244,14 @@ class AgentLoop:
                 result = f"[SOFT-FAIL] {vf.get('reason', '验证失败')}"
                 if debug:
                     print(f"  [VERIFY] 软失败: {vf['reason']}")
+
+        # Goal 验证器 — 独立 judge 判断任务是否真正完成（仅对长结果生效）
+        if "[STOPPED]" not in result and "[ERROR]" not in result and "[SOFT-FAIL]" not in result and len(result) > 200:
+            gv = self._goal_verifier.verify(user_input, result)
+            if not gv.get("passed"):
+                result = f"[GOAL-FAIL] {gv.get('reason', '')}"
+                if debug:
+                    print(f"  [GOAL] 独立 judge 判定未完成: {gv['reason']}")
 
         # 进化层：每次执行后复盘 + 沉淀
         if self.enable_evolution:

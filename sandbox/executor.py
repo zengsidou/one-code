@@ -18,12 +18,20 @@ class SafeExecutor:
     def execute(self, command: str, cwd: str = ".") -> dict:
         """Execute a command in sandbox, return {ok, output, error, duration_ms, blocked_by}"""
         result = {
-            "ok": True,
-            "output": "",
-            "error": "",
-            "duration_ms": 0,
-            "blocked_by": "",
+            "ok": True, "output": "", "error": "", "duration_ms": 0, "blocked_by": "",
         }
+
+        # 优先用 tree-sitter AST 安全检测
+        try:
+            from tools.shell_safety import check_dangerous
+            check = check_dangerous(command)
+            if check.get("blocked"):
+                result["ok"] = False
+                result["blocked_by"] = check.get("reason", "dangerous command")
+                result["error"] = f"[BLOCKED] {result['blocked_by']}"
+                return result
+        except ImportError:
+            pass
 
         block_reason = self.jail.restrict_command(command)
         if block_reason:
@@ -31,6 +39,17 @@ class SafeExecutor:
             result["blocked_by"] = block_reason
             result["error"] = f"[BLOCKED] {block_reason}"
             return result
+
+        if not self.policy.allow_network:
+            has_network = any(
+                kw in command.lower()
+                for kw in ["curl ", "wget ", "nc ", "ncat ", "ping ", "traceroute", "ssh ", "scp ", "ftp "]
+            )
+            if has_network:
+                result["ok"] = False
+                result["blocked_by"] = "Network access disabled by policy"
+                result["error"] = f"[BLOCKED] Network access disabled"
+                return result
 
         if not self.policy.allow_network:
             has_network = any(

@@ -440,7 +440,7 @@ class ArchitectureApplier:
         return backup_path
 
     def apply(self, proposal: dict) -> bool:
-        """应用架构改动（带语法安全门）"""
+        """应用架构改动（语法安全门 + 依赖检测 + 事务回滚）"""
         file_path = proposal.get("full_path", "")
         old_code = proposal.get("old_code_hint", "")
         new_code = proposal.get("new_code", "")
@@ -463,9 +463,14 @@ class ArchitectureApplier:
                 else:
                     new_content = content.rstrip() + "\n\n" + new_code + "\n"
 
-            # ━━━ 安全门：语法检查 ━━━
+            # 安全门 1: 语法检查
             if not self._validate_syntax(file_path, new_content):
                 return False
+
+            # 安全门 2: 依赖影响分析
+            affected = self._detect_dependencies(file_path)
+            if affected:
+                print(f"  [L4-DEPS] 改动影响 {len(affected)} 个依赖: {', '.join(affected[:5])}")
 
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
@@ -474,11 +479,51 @@ class ArchitectureApplier:
                 "file_path": file_path,
                 "backup": backup_path,
                 "proposal": proposal,
+                "dependencies": affected,
                 "timestamp": datetime.now().isoformat(),
             })
             return True
         except Exception:
             return False
+
+    @staticmethod
+    def _detect_dependencies(file_path: str) -> list[str]:
+        """检测哪些文件依赖了即将被修改的文件"""
+        import ast
+        module_name = os.path.basename(file_path).replace(".py", "")
+        parent_dir = os.path.dirname(file_path).replace("/", ".").replace("\\", ".")
+        affected = []
+
+        for root, _, files in os.walk("."):
+            if any(skip in root for skip in [".git", "__pycache__", ".trash", "arch_backups"]):
+                continue
+            for f in files:
+                if not f.endswith(".py"):
+                    continue
+                full = os.path.join(root, f)
+                if full == file_path:
+                    continue
+                try:
+                    with open(full, "r", encoding="utf-8") as fh:
+                        source = fh.read()
+                except Exception:
+                    continue
+                try:
+                    tree = ast.parse(source)
+                except SyntaxError:
+                    continue
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            imported = alias.name.split(".")[-1]
+                            if imported == module_name:
+                                affected.append(full)
+                    elif isinstance(node, ast.ImportFrom):
+                        if node.module:
+                            parts = node.module.split(".")
+                            if module_name in parts or node.module.startswith(parent_dir):
+                                affected.append(full)
+        return affected
 
     @staticmethod
     def _validate_syntax(file_path: str, content: str) -> bool:
@@ -707,11 +752,11 @@ class ArchitectureValidator:
                 self._baseline[task] = ""
 
     def validate(self, agent_instance) -> dict:
-        """运行基准任务验证改动效果
+        """运行基准任务验证改动效果 + 全量测试回归门
 
         Returns:
             { total, success_count, success_rate, improved (bool),
-              failures: [{task, reason}] }
+              failures: [{task, reason}], tests_passed: bool, test_output: str }
         """
         if not self.benchmarks:
             return {"total": 0, "success_count": 0, "success_rate": 0, "improved": False}
@@ -724,17 +769,37 @@ class ArchitectureValidator:
                 if reason:
                     failures.append({"task": task, "reason": reason})
             except Exception as e:
-                failures.append({"task": task, "reason": f"Exception: {e}"})
+                failures.append({"task": task, "reason": str(e)})
 
-        success = len(self.benchmarks) - len(failures)
-        rate = success / len(self.benchmarks)
+        total = len(self.benchmarks)
+        success = total - len(failures)
+
+        # 回归门控：运行全量测试
+        test_passed, test_output = self._run_test_suite()
+
         return {
-            "total": len(self.benchmarks),
+            "total": total,
             "success_count": success,
-            "success_rate": round(rate, 2),
-            "improved": rate >= 0.5,
+            "success_rate": success / total if total > 0 else 0,
+            "improved": len(failures) == 0 and test_passed,
             "failures": failures,
+            "tests_passed": test_passed,
+            "test_output": test_output[:300],
         }
+
+    @staticmethod
+    def _run_test_suite() -> tuple[bool, str]:
+        """运行全量 pytest 作为回归门控"""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["python", "-m", "pytest", "tests/", "-q", "--tb=short"],
+                capture_output=True, text=True, timeout=60,
+            )
+            output = result.stdout + result.stderr
+            return result.returncode == 0, output
+        except Exception as e:
+            return False, f"测试执行失败: {e}"
 
     def _check_degraded(self, task: str, result: str) -> str | None:
         """检查输出是否退化。返回 None 表示通过，返回字符串表示失败原因。"""
