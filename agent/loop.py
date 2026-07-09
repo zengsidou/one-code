@@ -81,8 +81,17 @@ class AgentLoop:
             self.llm_flash = self.llm
 
         self.registry = registry or ToolRegistry()
-        self.memory = memory
-        if self.memory and hasattr(self.memory, "short_term"):
+        if memory is None:
+            from memory.short_term import ShortTermMemory
+            from memory.long_term import LongTermMemory
+            from memory import MemoryManager
+            self.memory = MemoryManager(
+                short=ShortTermMemory(),
+                long=LongTermMemory(self.llm),
+            )
+        else:
+            self.memory = memory
+        if hasattr(self.memory, "short_term"):
             self.memory.short_term.set_llm(self.llm)
         self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self.max_steps = max_steps
