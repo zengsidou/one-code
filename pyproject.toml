@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "one-code"
+version = "0.1.0"
+description = "AI Coding Agent Framework with Contract-First execution, multi-model support, and LSP code intelligence"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [{name = "One-Code Authors"}]
+keywords = ["ai", "coding", "agent", "llm", "developer-tools"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+]
+
+dependencies = [
+    "chromadb>=0.4.0",
+    "httpx",
+    "requests>=2.31.0",
+    "pydantic>=2.0.0",
+    "psutil>=5.9.0",
+    "flask>=3.0",
+    "ddgs>=6.0",
+    "html2text>=2024",
+    "jieba>=0.42",
+]
+
+[project.optional-dependencies]
+desktop = ["pywebview>=5.0", "flask-sock>=0.7"]
+lsp = ["python-lsp-server"]
+security = ["tree-sitter", "tree-sitter-bash"]
+all = ["one-code[desktop,lsp,security]"]
+
+[project.scripts]
+one-code = "main:main"
+one-code-ide = "ide_server:main"
+one-code-desktop = "ide_desktop:main"
+
+[tool.setuptools.packages.find]
+include = ["agent*", "llm*", "memory*", "tools*", "mcp*", "sandbox*", "eval*", "ci*", "ide*"]

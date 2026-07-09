@@ -59,7 +59,9 @@ class SkillLibrary:
         task_lower = task.lower()
         scored = []
         for s in self.skills:
-            hits = sum(1 for t in s.triggers if t.lower() in task_lower or t.lower() in s.name.lower())
+            hits = sum(1 for t in s.triggers if t.lower() in task_lower)
+            if s.name.lower() in task_lower:
+                hits += 2
             if hits > 0:
                 scored.append((hits, s))
         scored.sort(key=lambda x: -x[0])

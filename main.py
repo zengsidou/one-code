@@ -41,6 +41,7 @@ def main():
     # Choose LLM backend
     llm_type = "deepseek" if os.environ.get("DEEPSEEK_API_KEY") else "ollama"
     use_contract = "--contract" in sys.argv or "-c" in sys.argv
+    use_stream = "--stream" in sys.argv or "-s" in sys.argv
 
     print(Colors.c("=" * 60, Colors.CYAN))
     print(Colors.c("  One-Code Framework", Colors.CYAN))
@@ -75,7 +76,7 @@ def main():
     print(f"  Tools:     {Colors.c(str(len(registry.tool_names)), Colors.GREEN)}")
     print(f"  Contract:  {Colors.c('ON' if use_contract else 'OFF', Colors.MAGENTA)}")
     print(Colors.c("-" * 60, Colors.CYAN))
-    print(f"  /exit     /tools   /memory   /clear")
+    print(f"  /exit     /tools   /memory   /clear{'  /stream' if not use_stream else ''}")
     print(Colors.c("-" * 60, Colors.CYAN))
     print()
 
@@ -103,13 +104,21 @@ def main():
                 print()
             elif cmd == "/clear":
                 memory.clear(); print(f"{Colors.c('记忆已清空', Colors.GREEN)}\n")
+            elif cmd == "/stream":
+                use_stream = not use_stream; print(f"{Colors.c('流式输出: ' + ('ON' if use_stream else 'OFF'), Colors.MAGENTA)}\n")
             else:
                 print(f"{Colors.c('未知命令', Colors.RED)}: {cmd}\n")
             continue
 
-        print(Colors.c("  ...思考中...", Colors.YELLOW))
-        response = agent.run(raw)
-        print(f"{Colors.c(response, Colors.CYAN)}")
+        if use_stream:
+            print(Colors.c("  ...思考中...", Colors.YELLOW))
+            for token in llm.generate_stream(agent.memory.short_term.get_messages(), agent.registry.get_schemas()):
+                print(token, end="", flush=True)
+            print()
+        else:
+            print(Colors.c("  ...思考中...", Colors.YELLOW))
+            response = agent.run(raw)
+            print(f"{Colors.c(response, Colors.CYAN)}")
         print()
 
 
