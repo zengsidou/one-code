@@ -79,11 +79,16 @@ body{font:var(--fs)/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);col
 <div class="main">
   <div class="header">
     <span class="title">One-Code IDE</span>
-    <span style="font-size:11px;color:var(--fg2)">
+    <span style="font-size:calc(var(--fs)*0.9);color:var(--fg2)">
       <button class="mode-btn active" id="modeBuild" onclick="setMode('build')" style="margin-right:4px">Build</button>
       <button class="mode-btn" id="modePlan" onclick="setMode('plan')">Plan</button>
       <button class="mode-btn" id="modeCompose" onclick="setMode('compose')">Compose</button>
-      &nbsp;|&nbsp; <span id="modelName" style="color:var(--accent)">deepseek-v4-pro</span>
+      &nbsp;|&nbsp; <select id="modelSelect" onchange="switchModel(this.value)" style="background:var(--bg3);color:var(--accent);border:1px solid var(--border);border-radius:4px;font-size:calc(var(--fs)*0.85);padding:2px 6px">
+        <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+        <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+        <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+        <option value="gpt-4o">GPT-4o</option>
+      </select>
       &nbsp; <span id="statusBadge" class="status idle">就绪</span>
     </span>
   </div>
@@ -103,7 +108,6 @@ body{font:var(--fs)/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);col
   <hr>
   <div class="stat-row"><span class="stat-label">Token</span><span class="stat-val" id="tokenVal">-</span></div>
   <div class="stat-row"><span class="stat-label">费用</span><span class="stat-val" id="costVal">-</span></div>
-  <button onclick="clearMemory()" style="width:100%;padding:calc(var(--fs)*0.4);background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:4px;cursor:pointer;font-size:calc(var(--fs)*0.85)">清空记忆</button>
 </div>
 <script>
 let running=false;
@@ -123,7 +127,6 @@ async function updateStatus(){
     if(data.model)document.getElementById('modelVal').textContent=data.model;
   }catch(e){}
 }
-async function clearMemory(){await fetch('/api/clear',{method:'POST'});addMsg('记忆已清空','system')}
 
 function send(){
   var inp=document.getElementById('userInput');
@@ -172,13 +175,8 @@ function addMsg(text,type,id){
   return div;
 }
 function addToolCard(tool,result){
-  var div=document.createElement('div');
-  div.className='msg tool';
-  div.innerHTML='<div class="tool-name">'+esc(tool)+'</div><div class="tool-result">'+esc(result||'')+'</div>';
-  document.getElementById('chatBox').appendChild(div);
-  div.scrollIntoView({behavior:'smooth',block:'end'});
-  document.getElementById('stepsVal').textContent=parseInt(document.getElementById('stepsVal').textContent||0)+1;
 }
+function renderMarkdown(text){
 function removeEl(id){var e=document.getElementById(id);if(e)e.remove()}
 
 async function loadFiles(){
@@ -248,7 +246,14 @@ function setMode(mode){
   document.querySelectorAll('.mode-btn').forEach(function(b){b.classList.remove('active')});
   document.getElementById('mode'+mode.charAt(0).toUpperCase()+mode.slice(1)).classList.add('active');
   currentMode=mode;
-  document.getElementById('modelVal').textContent=mode==='plan'?'read-only':'full';
+  document.getElementById('modeVal').textContent=mode;
+}
+function switchModel(model){
+  fetch('/api/model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:model})})
+    .then(function(r){return r.json()})
+    .then(function(d){if(d.ok)document.getElementById('modelVal').textContent=model})
+    .catch(function(){});
+  document.getElementById('modelVal').textContent=model;
 }
 // === token/cost polling ===
 setInterval(function(){

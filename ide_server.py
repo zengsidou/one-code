@@ -202,6 +202,26 @@ def set_mode():
     return jsonify({"error": f"Invalid mode: {mode}"}), 400
 
 
+@app.route("/api/model", methods=["POST"])
+def switch_model():
+    agent = get_agent()
+    data = request.get_json()
+    model = data.get("model", "")
+    try:
+        if model.startswith("deepseek"):
+            from llm.deepseek_api import DeepSeekAdapter
+            agent.llm = DeepSeekAdapter(model=model)
+        elif model.startswith("gemini"):
+            from llm.gemini_api import GeminiAdapter
+            agent.llm = GeminiAdapter(model=model)
+        elif model.startswith("gpt"):
+            from llm.openai_api import OpenAIAdapter
+            agent.llm = OpenAIAdapter(model=model)
+        else:
+            return jsonify({"error": f"Unknown model: {model}"}), 400
+        return jsonify({"ok": True, "model": model})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 @app.route("/api/suggest", methods=["GET"])
 def suggest():
     q = request.args.get("q", "").lower()
