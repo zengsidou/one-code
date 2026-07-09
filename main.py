@@ -39,26 +39,35 @@ def main():
     Colors.enable()
 
     # Choose LLM backend
-    llm_type = "deepseek" if os.environ.get("DEEPSEEK_API_KEY") else "ollama"
-    use_contract = "--contract" in sys.argv or "-c" in sys.argv
-    use_stream = "--stream" in sys.argv or "-s" in sys.argv
-
-    print(Colors.c("=" * 60, Colors.CYAN))
-    print(Colors.c("  One-Code Framework", Colors.CYAN))
-    print(Colors.c("  Agent Loop + Tool Use + Contract-First", Colors.CYAN))
-    print(Colors.c("=" * 60, Colors.CYAN))
-
-    registry = ToolRegistry(safe_mode=True)
-    sandbox = SafeExecutor(policy=SandboxPolicy())
-
-    if llm_type == "deepseek":
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        llm_type = "deepseek"
         from llm.deepseek_api import DeepSeekAdapter
         llm = DeepSeekAdapter()
         model_name = "deepseek-v4-pro"
+    elif os.environ.get("OPENAI_API_KEY"):
+        llm_type = "openai"
+        from llm.openai_api import OpenAIAdapter
+        llm = OpenAIAdapter()
+        model_name = llm.model
+    elif os.environ.get("GEMINI_API_KEY"):
+        llm_type = "gemini"
+        from llm.gemini_api import GeminiAdapter
+        llm = GeminiAdapter()
+        model_name = llm.model
     else:
         from llm.ollama import OllamaClient
-        llm = OllamaClient(model="deepseek-r1:8b")
-        model_name = llm.model
+        try:
+            llm = OllamaClient(model="deepseek-r1:8b")
+            model_name = llm.model
+            llm_type = "ollama"
+        except Exception:
+            print(Colors.c("未配置 API Key 且 Ollama 不可用。请设置:", Colors.RED))
+            print(Colors.c("  DEEPSEEK_API_KEY 或 OPENAI_API_KEY 或 GEMINI_API_KEY", Colors.RED))
+            print(Colors.c("  或启动 Ollama 服务", Colors.RED))
+            return
+
+    use_contract = "--contract" in sys.argv or "-c" in sys.argv
+    use_stream = "--stream" in sys.argv or "-s" in sys.argv
 
     register_builtin_tools(registry, sandbox=sandbox, llm=llm)
     load_plugin_tools(registry)
