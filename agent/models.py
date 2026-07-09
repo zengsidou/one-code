@@ -78,3 +78,12 @@ class ContractResult:
     step_results: list[dict] = field(default_factory=list)
     consistency_score: int = 0  # 0-5 分，最终产物与契约的一致性
     user_confirmed: bool = False
+
+
+@dataclass
+class Task:
+    """可追踪的子任务"""
+    id: str            # T1, T1.1, T2, ...
+    title: str
+    status: str = "pending"  # pending / in_progress / done / abandoned
+    parent_id: str | None = None

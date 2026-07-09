@@ -289,16 +289,20 @@ class AgentLoop:
                     if self._token_opt:
                         result = self._token_opt.compress_tool_output(result)
                     is_error = result.startswith("[ERROR]")
-                    if self.observability:
-                        self.observability.trace_tool_end(step, tc.name, result, error=is_error)
+                    is_recoverable = is_error and not (
+                        "Unknown tool" in result or "Tool '" in result
+                    )
+                    if is_error and is_recoverable:
+                        self._step_trace.append(f"Step{step}: RECOVERABLE {tc.name}")
+                    elif is_error:
+                        self._step_trace.append(f"Step{step}: ERROR {tc.name}")
+                        if self.observability:
+                            self.observability.trace_tool_end(step, tc.name, result, error=is_error)
                     self.memory.add_message(Message(
                         role="tool", content=result,
                         tool_call_id=tc.id, tool_name=tc.name,
                     ))
                     if result.startswith("[ERROR]"):
-                        if debug:
-                            print(f" ERR: {result[:80]}")
-                        self._step_trace.append(f"Step{step}: ERROR {tc.name}")
                         is_tool_crash = (
                             result.startswith("[ERROR] Unknown tool")
                             or result.startswith("[ERROR] Tool '")
@@ -375,50 +379,46 @@ class AgentLoop:
         return self.memory.short_term.get_messages()
 
     def _plan_and_execute(self, user_input: str, debug: bool = False) -> str:
-        """Plan-then-Execute 模式：先规划再执行。
-
-        1. Plan phase：LLM 生成结构化执行计划
-        2. Execute phase：按计划逐步执行，执行后验证
-        3. 不偏离计划；遇到失败可触发 re-plan
-        """
+        """Plan-then-Execute 模式: 先生成计划，用户确认后执行"""
         plan = self._generate_plan(user_input, debug)
         if not plan:
             return "[STOPPED] 无法生成执行计划"
 
-        if debug:
-            print(f"  [PLAN] {len(plan)} 步: {[s['goal'][:40] for s in plan]}")
+        print(f"\n  [PLAN] {len(plan)} steps:")
+        for i, s in enumerate(plan):
+            print(f"    {i+1}. {s.get('goal','?')}")
+
+        try:
+            choice = input("\n  [执行? y=yes / n=edit / q=cancel]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return "[CANCELLED]"
+
+        if choice == 'q':
+            return "[CANCELLED]"
+        if choice == 'n':
+            extra = input("  [补充说明]: ").strip()
+            if extra:
+                user_input = user_input + "\n补充: " + extra
+                plan = self._generate_plan(user_input, debug)
+                if not plan:
+                    return "[STOPPED]"
 
         results = []
         for i, step in enumerate(plan):
-            if debug:
-                print(f"  [EXECUTE {i+1}/{len(plan)}] {step['goal'][:60]}")
-
+            print(f"  [EXECUTE {i+1}/{len(plan)}] {step['goal'][:60]}")
             sub_prompt = (
                 f"整体任务: {user_input}\n\n"
-                f"执行计划 ({len(plan)} 步):\n" +
-                "\n".join(f"{j+1}. [{step['action']}] {step['goal']}"
-                          for j, step in enumerate(plan)) +
-                f"\n\n当前执行第 {i+1} 步: {step['goal']}\n"
-                f"工具提示: {step.get('tools', '所有可用工具')}\n\n"
-                f"只完成当前这一步，完成后报告结果。"
+                f"执行计划:\n" +
+                "\n".join(f"{j+1}. {s['goal']}" for j, s in enumerate(plan)) +
+                f"\n\n当前执行第 {i+1} 步: {step['goal']}\n只完成这一步。"
             )
-
             self.memory.add_message(Message(role="user", content=sub_prompt))
-            step_result = self._run_loop(sub_prompt, debug)
-            results.append({"step": i+1, "goal": step["goal"], "result": step_result[:500]})
-
-            if "[STOPPED]" in step_result or "[ERROR]" in step_result:
-                # Step failed — try re-plan remaining steps
-                remaining = plan[i+1:]
-                if remaining and i < len(plan) - 1:
-                    if debug:
-                        print(f"  [REPLAN] 第{i+1}步失败，重新规划剩余步骤...")
-                    new_plan = self._generate_plan(
-                        f"{user_input}\n已完成: {step['goal']} (失败: {step_result[:200]})",
-                        debug,
-                    )
-                    if new_plan:
-                        plan[i+1:] = new_plan
+            result = self._run_loop(sub_prompt, debug)
+            results.append({"step": i+1, "goal": step["goal"], "result": result[:500]})
+            if "[STOPPED]" in result and i < len(plan) - 1:
+                new_plan = self._generate_plan(f"{user_input}\n已完成: {step['goal']} (失败: {result[:200]})", debug)
+                if new_plan:
+                    plan[i+1:] = new_plan
 
         all_outputs = "\n---\n".join(
             f"步骤{r['step']}: {r['goal']}\n{r['result']}" for r in results

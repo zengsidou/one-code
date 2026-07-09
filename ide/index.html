@@ -99,10 +99,11 @@ body{font:var(--fs)/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);col
   </div>
 </div>
 <div class="stats" id="statsPanel">
-  <h3>会话</h3>
+  <h3>Tasks</h3>
+  <div id="taskList" style="font-size:calc(var(--fs)*0.75);max-height:180px;overflow-y:auto"></div>
+  <hr>
   <div class="stat-row"><span class="stat-label">模型</span><span class="stat-val" id="modelVal">-</span></div>
   <div class="stat-row"><span class="stat-label">模式</span><span class="stat-val" id="modeVal">build</span></div>
-  <hr>
   <div class="stat-row"><span class="stat-label">工具数</span><span class="stat-val" id="toolCount">-</span></div>
   <div class="stat-row"><span class="stat-label">Token</span><span class="stat-val" id="tokenVal">-</span></div>
   <div class="stat-row"><span class="stat-label">费用</span><span class="stat-val" id="costVal">¥0</span></div>
@@ -147,6 +148,16 @@ async function updateStatus(){
   try{
     var res2=await fetch('/api/status');var data2=await res2.json();
     document.getElementById('toolCount').textContent=data2.tools||'-';
+  }catch(e){}
+  // Tasks
+  try{
+    var res3=await fetch('/api/tasks');var data3=await res3.json();
+    var h='';
+    (data3.tasks||[]).forEach(function(t){
+      var s={'pending':'○','in_progress':'●','done':'✓','abandoned':'✗'}[t.status]||'?';
+      h+='<div>'+s+' '+esc(t.title)+'</div>';
+    });
+    document.getElementById('taskList').innerHTML=h||'no tasks';
   }catch(e){}
 }
 // === status ===

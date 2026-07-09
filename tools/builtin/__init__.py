@@ -188,8 +188,8 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
         except Exception as e:
             return f"[ERROR] List dir failed: {e}"
 
-    @registry.register("run_shell", "执行 Shell 命令并返回输出，超时默认 30 秒")
-    def _run_shell(command: str, timeout: int = 30) -> str:
+    @registry.register("run_shell", "执行 Shell 命令。command=命令, timeout=超时秒数, description=简短描述用途(5-10词)")
+    def _run_shell(command: str, timeout: int = 30, description: str = "") -> str:
         if sandbox:
             result = sandbox.execute(command)
             if result["ok"]:
@@ -393,6 +393,51 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
     @registry.register("memory_search", "搜索对话记忆。query=搜索词")
     def memory_search(query: str) -> str:
         return f"记忆搜索 '{query}': 当前会话中检索..."
+
+    @registry.register("history", "搜索对话历史。query=关键词")
+    def history(query: str) -> str:
+        results = []
+        for i, m in enumerate(short_mem.get_messages()):
+            if query.lower() in (m.content or "").lower():
+                results.append(f"  [{m.role}] {(m.content or '')[:120]}")
+                if len(results) >= 10:
+                    break
+        if results:
+            return f"历史搜索 '{query}':\n" + "\n".join(results)
+        return f"未找到包含 '{query}' 的对话记录"
+
+    @registry.register("task", "任务管理: action=create/list/start/done。title=任务名，id=任务编号。agent主动用task工具拆分和跟踪进度。")
+    def task(action: str = "list", title: str = "", id: str = "") -> str:
+        from agent.models import Task as T
+        if not hasattr(registry, '_tasks'):
+            registry._tasks = []
+        tasks = registry._tasks
+        if action == "create" and title:
+            tid = f"T{len(tasks)+1}"
+            tasks.append(T(id=tid, title=title, status="pending"))
+            return f"已创建: {tid} {title}"
+        if action == "start" and id:
+            for t in tasks:
+                if t.id == id:
+                    t.status = "in_progress"
+                    return f"开始执行: {id} {t.title}"
+        if action == "done" and id:
+            for t in tasks:
+                if t.id == id:
+                    t.status = "done"
+                    return f"已完成: {id} {t.title}"
+        if action == "abandon" and id:
+            for t in tasks:
+                if t.id == id:
+                    t.status = "abandoned"
+                    return f"已放弃: {id} {t.title}"
+        if not tasks:
+            return "无任务"
+        lines = []
+        for t in tasks:
+            s = {"pending":"⏳","in_progress":"🔄","done":"✅","abandoned":"❌"}.get(t.status,"?")
+            lines.append(f"{t.id} [{s}] {t.title}")
+        return "\n".join(lines)
 
     # ━━━ 工具别名（LLM 可能用不同名称调用）━━━
     registry.add_alias("search_content", "grep")

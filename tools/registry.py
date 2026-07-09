@@ -107,6 +107,16 @@ class ToolRegistry:
                     return danger
             result = func(**arguments)
             output = str(result) if result is not None else "Tool executed successfully."
+            if len(output) > 4000:
+                import tempfile, os
+                f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+                f.write(output)
+                path = f.name
+                f.close()
+                head = output[:2000]
+                tail = output[-1000:]
+                output = f"{head}\n... [{len(output)-3000} chars truncated, full output at {path}]\n{tail}"
+                output += f"\n[Use read_file offset to read the full file: {path}]"
             return output
         except Exception as e:
             return f"[ERROR] Tool '{name}' failed: {e}"

@@ -209,6 +209,13 @@ def cwd():
     return jsonify({"cwd": os.getcwd()})
 
 
+@app.route("/api/tasks", methods=["GET"])
+def tasks():
+    agent = get_agent()
+    tasks = getattr(agent.registry, '_tasks', [])
+    return jsonify({"tasks": [{"id": t.id, "title": t.title, "status": t.status} for t in tasks]})
+
+
 @app.route("/api/mode", methods=["POST"])
 def set_mode():
     agent = get_agent()
