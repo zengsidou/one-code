@@ -161,5 +161,5 @@ class DeepSeekAdapter(BaseLLM):
             return {}
 
     def embed(self, text: str) -> list[float]:
-        """DeepSeek 不提供原生 embedding API，返回零向量占位"""
+        """DeepSeek 不提供原生 embedding API，返回零向量占位。LongTermMemory 会自动降级到 BM25 关键词检索。"""
         return [0.0] * 1024

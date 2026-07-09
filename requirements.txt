@@ -6,3 +6,6 @@ psutil>=5.9.0
 flask>=3.0
 ddgs>=6.0
 html2text>=2024
+jieba>=0.42
+pywebview>=5.0
+flask-sock>=0.7

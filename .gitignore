@@ -7,6 +7,7 @@ __pycache__/
 *.pyc
 .env
 *.tmp
+.trash/
 fix_history.json
 skill_library.json
 ability_profile.json

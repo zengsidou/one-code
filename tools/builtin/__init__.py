@@ -5,6 +5,13 @@ from tools.registry import run_shell
 
 
 def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
+    import os
+    import sys
+    import re
+    import shutil
+    import subprocess
+    from datetime import datetime
+
     @registry.register("read_file", "读取文件内容，支持 offset(起始行，1开始)和 limit(行数上限)")
     def read_file(path: str, offset: int = 0, limit: int = 2000) -> str:
         try:
@@ -87,27 +94,72 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
         except Exception as e:
             return f"[ERROR] glob 失败: {e}"
 
-    @registry.register("edit_file", "精确替换文件中的指定字符串。old_string 必须唯一出现，否则替换失败")
+    @registry.register("edit_file", "智能编辑文件。old_string 尽量精确匹配；找不到时会尝试缩进修正、空白标准化等多策略模糊匹配")
     def edit_file(path: str, old_string: str, new_string: str) -> str:
-        try:
-            with open(path, encoding="utf-8") as f:
-                content = f.read()
-        except FileNotFoundError:
+        from tools.edit_smart import edit_smart
+        return edit_smart(path, old_string, new_string)
+
+    @registry.register("delete_file", "删除文件（自动备份到 .trash/ 目录，可恢复）")
+    def delete_file(path: str) -> str:
+        if not os.path.exists(path):
             return f"[ERROR] 文件不存在: {path}"
-        except Exception as e:
-            return f"[ERROR] 读取文件失败: {e}"
-
-        count = content.count(old_string)
-        if count == 0:
-            return f"[ERROR] 未找到要替换的文本 (在 {path} 中)。请确认 old_string 与文件内容精确匹配（包括缩进、换行）"
-        if count > 1:
-            return f"[ERROR] 找到 {count} 处匹配，请提供更多上下文以唯一确定要替换的位置"
-
+        trash_dir = ".trash"
+        os.makedirs(trash_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = os.path.basename(path)
+        backup = os.path.join(trash_dir, f"{ts}_{name}")
         try:
-            new_content = content.replace(old_string, new_string, 1)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-            return f"已替换 {path} 中的 1 处匹配 ({len(content)} → {len(new_content)} 字符)"
+            os.rename(path, backup)
+            return f"已删除 {path} (备份到 {backup})"
+        except OSError:
+            shutil.copy2(path, backup)
+            os.remove(path)
+            return f"已删除 {path} (跨盘备份到 {backup})"
+
+    @registry.register("rename_file", "重命名/移动文件或目录")
+    def rename_file(old_path: str, new_path: str) -> str:
+        if not os.path.exists(old_path):
+            return f"[ERROR] 源文件不存在: {old_path}"
+        os.makedirs(os.path.dirname(new_path) or ".", exist_ok=True)
+        try:
+            os.rename(old_path, new_path)
+            return f"已重命名 {old_path} → {new_path}"
+        except OSError as e:
+            return f"[ERROR] 重命名失败: {e}"
+
+    @registry.register("diff_file", "查看文件与 git HEAD 或暂存区的差异")
+    def diff_file(path: str, staged: bool = False) -> str:
+        cmd = ["git", "diff"]
+        if staged:
+            cmd.append("--staged")
+        cmd.extend(["--", path])
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            output = (result.stdout or result.stderr or "(无差异)")[:3000]
+            return output if output.strip() else "(无差异)"
+        except Exception as e:
+            return f"[ERROR] diff 失败: {e}"
+
+    @registry.register("git", "执行 Git 操作: status/diff/log/add/commit。commit 需要 message 参数")
+    def git(action: str, repo: str = ".", message: str = "") -> str:
+        """安全 git 操作"""
+        # Only allow safe operations
+        allowed = ["status", "diff", "log", "add", "commit", "branch", "stash"]
+        if action not in allowed:
+            return f"[ERROR] 不安全的 git 操作: {action}。允许: {', '.join(allowed)}"
+        cmd = ["git", "-C", repo, action]
+        if action == "commit" and message:
+            cmd.extend(["-m", message])
+        elif action == "diff":
+            cmd.append("--stat")
+        elif action == "log":
+            cmd.extend(["--oneline", "-10"])
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            raw = result.stdout or result.stderr
+            return raw[:3000] if raw.strip() else "(无输出)"
+        except Exception as e:
+            return f"[ERROR] git {action} 失败: {e}"
         except Exception as e:
             return f"[ERROR] 写入文件失败: {e}"
 
@@ -334,3 +386,7 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
     registry.add_alias("execute", "run_shell")
     registry.add_alias("bash", "run_shell")
     registry.add_alias("shell", "run_shell")
+    registry.add_alias("delete", "delete_file")
+    registry.add_alias("rm", "delete_file")
+    registry.add_alias("rename", "rename_file")
+    registry.add_alias("mv", "rename_file")

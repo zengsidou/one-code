@@ -119,16 +119,22 @@ class SkillLibrary:
 
     @staticmethod
     def _keyword_score(task_desc: str, skill: dict, scored: list):
-        keywords = set(task_desc.lower().split())
         text = f"{skill['name']} {skill.get('description','')} {skill.get('trigger','')}".lower()
-        kw_hits = sum(1 for kw in keywords if kw in text)
-        # Also check bigrams for better phrase matching
         words = task_desc.lower().split()
+        # 中文分词增强
+        try:
+            import jieba
+            keywords_ch = list(jieba.cut_for_search(task_desc.lower()))
+        except ImportError:
+            keywords_ch = words
+        keywords = set(words) | set(keywords_ch)
+        kw_hits = sum(1 for kw in keywords if len(kw) >= 2 and kw in text)
         bigrams = set(f"{words[i]} {words[i+1]}" for i in range(len(words)-1))
         bg_hits = sum(1 for bg in bigrams if bg in text)
         score = kw_hits + bg_hits * 2
+        bonus = 1 if skill.get("strength", 0.5) > 0.7 else 0
         if score > 0:
-            scored.append((score + skill.get("strength", 0.5), skill))
+            scored.append((score + skill.get("strength", 0.5) + bonus, skill))
 
     @staticmethod
     def _cosine_similarity(a: list[float], b: list[float]) -> float:
