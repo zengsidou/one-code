@@ -201,7 +201,7 @@ def chat_stream():
 
 @sock.route("/ws/chat")
 def chat_ws(ws):
-    import time as _time
+    import threading, queue
     while True:
         try:
             data = json.loads(ws.receive())
@@ -213,16 +213,20 @@ def chat_ws(ws):
         agent = get_agent()
         for m in _build_context():
             agent.memory.add_message(m)
-        try:
-            result = agent.run(text)
-            # Stream response in chunks
-            chunk = 30
-            for i in range(0, len(result), chunk):
-                ws.send(json.dumps({"type": "text", "text": result[i:i+chunk]}))
-                _time.sleep(0.02)
-            ws.send(json.dumps({"type": "done"}))
-        except Exception as e:
-            ws.send(json.dumps({"type": "error", "text": str(e)}))
+
+        def process():
+            try:
+                result = agent.run(text)
+                # Chunk and send for visual streaming effect
+                chunk = 3
+                for i in range(0, len(result), chunk):
+                    ws.send(json.dumps({"type": "text", "text": result[i:i+chunk]}))
+                    import time; time.sleep(0.01)
+                ws.send(json.dumps({"type": "done"}))
+            except Exception as e:
+                ws.send(json.dumps({"type": "error", "text": str(e)}))
+
+        threading.Thread(target=process, daemon=True).start()
 
 
 @app.route("/api/files", methods=["GET"])
