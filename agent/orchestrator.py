@@ -154,10 +154,4 @@ class AgentOrchestrator:
         return tool_allowlist
 
     def _build_subset_registry(self, tool_names: list[str]) -> ToolRegistry:
-        sub_registry = ToolRegistry(safe_mode=False)
-        for name in tool_names:
-            if name in self.full_registry._tools:
-                sub_registry._tools[name] = self.full_registry._tools[name]
-                if name in self.full_registry._tool_metadata:
-                    sub_registry._tool_metadata[name] = self.full_registry._tool_metadata[name]
-        return sub_registry
+        return self.full_registry.subset(tool_names)

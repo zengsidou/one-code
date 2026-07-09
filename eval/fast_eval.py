@@ -183,7 +183,6 @@ def run_fast_eval(count: int = 10, max_steps: int = 8) -> list[FastEvalResult]:
         agent = AgentLoop(
             llm=llm, registry=registry, memory=memory,
             max_steps=max_steps,
-            enable_self_optimize=False, enable_evolution=False,
             loop_detect_threshold=8,
         )
 

@@ -146,8 +146,6 @@ class Specialist:
             memory=memory,
             max_steps=self.max_steps,
             system_prompt=self.system_prompt,
-            enable_self_optimize=False,
-            enable_evolution=False,
         )
         return agent.run(full_task, debug=debug)
 

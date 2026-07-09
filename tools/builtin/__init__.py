@@ -310,26 +310,12 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
         except Exception as e:
             return f"[ERROR] 计算失败: {e}"
 
-    @registry.register("delegate_task", "委派子 Agent 执行独立子任务，可指定工具白名单。参数: task=任务描述, tools=允许的工具名列表(逗号分隔), 可选 max_steps=最大步骤数")
+    @registry.register("delegate_task", "委派子 Agent 执行独立子任务。task=任务描述, tools=工具名(逗号分隔), max_steps=步数")
     def delegate_task(task: str, tools: str = "", max_steps: int = 5) -> str:
-        """Spawn a SubAgent to handle a specific subtask"""
-        from tools.registry import ToolRegistry
         from agent.subagent import SubAgent
 
-        tool_names = [t.strip() for t in tools.split(",") if t.strip()] if tools else []
-        sub_registry = ToolRegistry(safe_mode=False)
-
-        if not tool_names:
-            readable_tools = ["read_file", "list_dir", "calculate"]
-            tool_names = readable_tools
-
-        for name in tool_names:
-            if name in registry._tools:
-                # Copy existing tool to sub-registry
-                func = registry._tools[name]
-                meta = registry._tool_metadata.get(name, {})
-                sub_registry._tools[name] = func
-                sub_registry._tool_metadata[name] = meta
+        tool_names = [t.strip() for t in tools.split(",") if t.strip()] if tools else ["read_file", "list_dir", "calculate"]
+        sub_registry = registry.subset(tool_names)
 
         if not sub_registry._tools:
             return "[ERROR] No valid tools available for sub-agent"

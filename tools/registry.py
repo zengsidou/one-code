@@ -149,6 +149,16 @@ class ToolRegistry:
                         return f"[BLOCKED] Dangerous pattern detected: {pattern}"
         return None
 
+    def subset(self, names: list[str]) -> "ToolRegistry":
+        """创建仅包含指定工具的子注册表"""
+        sub = ToolRegistry(safe_mode=False)
+        for name in names:
+            if name in self._tools:
+                sub._tools[name] = self._tools[name]
+                if name in self._tool_metadata:
+                    sub._tool_metadata[name] = self._tool_metadata[name]
+        return sub
+
     @property
     def tool_names(self) -> list[str]:
         return list(self._tools.keys())

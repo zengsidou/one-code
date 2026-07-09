@@ -216,8 +216,6 @@ class SWEBenchRunner:
             registry=registry,
             memory=memory,
             max_steps=self.max_steps,
-            enable_self_optimize=False,
-            enable_evolution=False,
             loop_detect_threshold=6,
             plan_first=plan_first,
         )
