@@ -423,6 +423,24 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
             lines.append(f"  {file}:{d['line']}:{d['col']} [{sev}] {d['message']}")
         return f"{file}: {len(diags)} 项诊断\n" + "\n".join(lines)
 
+    @registry.register("lsp_impact", "跨文件影响分析。修改文件前，查看有哪些其他文件依赖了它。参数: file=文件路径")
+    def lsp_impact(file: str) -> str:
+        from tools.lsp_client import get_lsp
+        try:
+            analysis = get_lsp().impact_analysis(file)
+        except Exception as e:
+            return f"[ERROR] LSP 未就绪: {e}"
+        symbols = analysis.get("symbols", [])
+        if not symbols:
+            return f"{file}: 无跨文件引用（修改安全）"
+        lines = [f"{file}: {len(symbols)} 个符号被跨文件引用:"]
+        for s in symbols[:8]:
+            ref_files = list(set(r["file"] for r in s["refs"]))
+            lines.append(f"  {s['name']} (行{s['line']}) → 被 {len(ref_files)} 个文件引用")
+            for rf in ref_files[:3]:
+                lines.append(f"    - {rf}")
+        return "\n".join(lines)
+
     @registry.register("apply_patch", "应用多文件结构化补丁。输入JSON数组:[{action:add|update|delete|move,file:路径,...}]。全部预检通过后原子写入，失败全回滚")
     def apply_patch(patch: str) -> str:
         from tools.apply_patch import apply_patch as do_patch

@@ -182,11 +182,63 @@ class LSPClient:
         return str(contents)[:800]
 
     def diagnostics(self, file_path: str | None = None) -> list[dict]:
-        """获取诊断信息（语法错误、类型警告等）"""
+        """获取诊断信息"""
         if file_path:
             uri = Path(file_path).resolve().as_uri()
             self._call("textDocument/didOpen", {
                 "textDocument": {"uri": uri, "languageId": "python", "version": 1, "text": ""}
+            })
+            resp = self._call("textDocument/diagnostic", {"textDocument": {"uri": uri}}, timeout=3)
+            if resp and "result" in resp:
+                items = resp["result"].get("items", [])
+                return [{
+                    "line": i.get("range", {}).get("start", {}).get("line", 0) + 1,
+                    "col": i.get("range", {}).get("start", {}).get("character", 0) + 1,
+                    "severity": i.get("severity", 3),
+                    "message": i.get("message", "")[:200],
+                } for i in items]
+        return []
+
+    def impact_analysis(self, file_path: str) -> dict:
+        """跨文件影响分析 — 修改一个文件会影响哪些其他文件
+
+        原理: 对文件中每个顶层符号(grep class/def)做 find_references，
+        汇总所有跨文件引用关系。
+
+        Returns:
+            {file: 被分析文件, symbols: [{name, refs: [{file, line}]}]}
+        """
+        if not os.path.exists(file_path):
+            return {"file": file_path, "symbols": [], "error": "文件不存在"}
+
+        # 提取所有顶层符号
+        symbols = []
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        import re
+        for i, line in enumerate(lines):
+            m = re.match(r"^\s*(def|class)\s+(\w+)", line)
+            if m:
+                symbols.append((i + 1, m.group(2)))
+
+        result = {"file": file_path, "symbols": []}
+        for line, name in symbols:
+            try:
+                refs = self.find_references(file_path, line, 1)
+                cross_file = [r for r in refs if r["file"] != file_path]
+                if cross_file:
+                    result["symbols"].append({
+                        "name": name,
+                        "line": line,
+                        "refs": cross_file[:10],
+                    })
+            except Exception:
+                pass
+
+        return result
+
+    def close(self):
             })
             resp = self._call("textDocument/diagnostic", {
                 "textDocument": {"uri": uri}

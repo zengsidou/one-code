@@ -38,7 +38,6 @@ class DeepSeekAdapter(BaseLLM):
         api_messages = self._build_api_messages(messages)
 
         last_error = None
-        last_error_body = ""
         for attempt in range(self.max_retries + 1):
             try:
                 body: dict[str, Any] = {
@@ -64,52 +63,92 @@ class DeepSeekAdapter(BaseLLM):
                     resp.raise_for_status()
                     data = resp.json()
 
-                choice = data["choices"][0]
-                msg = choice.get("message", {})
-                content = msg.get("content") or ""
-                reasoning = msg.get("reasoning_content") or ""
-                raw_tool_calls = msg.get("tool_calls")
+                return self._parse_response(data)
 
-                tool_calls = None
-                if raw_tool_calls:
-                    tool_calls = [
-                        ToolCall(
-                            id=tc.get("id", f"call_{i}"),
-                            name=tc.get("function", {}).get("name", ""),
-                            arguments=self._safe_parse_json(
-                                tc.get("function", {}).get("arguments", "{}")
-                            ),
-                        )
-                        for i, tc in enumerate(raw_tool_calls)
-                    ]
-
-                return Message(role="assistant", content=content, tool_calls=tool_calls, reasoning_content=reasoning)
-
-            except httpx.HTTPStatusError as e:
-                last_error = e
-                try:
-                    last_error_body = str(e.response.json().get("error", {}).get("message", ""))
-                except Exception:
-                    last_error_body = e.response.text[:300]
-                # 400 = orphaned tool messages → 清理后重试
-                if e.response.status_code == 400 and tools:
-                    cleaned = self._clean_orphaned_tools(api_messages)
-                    if len(cleaned) < len(api_messages):
-                        api_messages = cleaned
-                        if attempt < self.max_retries:
-                            time.sleep(0.5)
-                            continue
-                if attempt < self.max_retries:
-                    time.sleep(1)
             except Exception as e:
-                last_error = e
-                if attempt < self.max_retries:
-                    time.sleep(1)
+                last_error = str(e)
+                if attempt == self.max_retries:
+                    return Message(role="assistant", content=f"[LLM error] DeepSeek: {last_error}")
+                time.sleep(1)
 
-        err_msg = f"[LLM error: {last_error}]"
-        if last_error_body:
-            err_msg += f" (API: {last_error_body[:200]})"
-        return Message(role="assistant", content=err_msg)
+        return Message(role="assistant", content="[LLM error] max retries exceeded")
+
+    def generate_stream(self, messages: list[Message], tools: list[dict] | None = None) -> "collections.abc.Generator[str]":
+        """流式生成 — 逐 token 返回，用于实时 UI 展示"""
+        api_messages = self._build_api_messages(messages)
+
+        try:
+            body: dict[str, Any] = {
+                "model": self.model,
+                "messages": api_messages,
+                "temperature": 0.3,
+                "max_tokens": 4096,
+                "stream": True,
+            }
+            if tools:
+                body["tools"] = tools
+                body["tool_choice"] = "auto"
+
+            with httpx.Client(timeout=self.timeout) as client:
+                with client.stream(
+                    "POST",
+                    f"{DEEPSEEK_BASE}/chat/completions",
+                    json=body,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                ) as resp:
+                    resp.raise_for_status()
+                    for line in resp.iter_lines():
+                        if line.startswith("data: "):
+                            chunk = line[6:]
+                            if chunk == "[DONE]":
+                                break
+                            try:
+                                import json
+                                data = json.loads(chunk)
+                                delta = data.get("choices", [{}])[0].get("delta", {})
+                                content = delta.get("content", "")
+                                reasoning = delta.get("reasoning_content", "")
+                                if reasoning:
+                                    yield f"[思考] {reasoning}"
+                                if content:
+                                    yield content
+                                # Check for tool calls in stream
+                                tc = delta.get("tool_calls")
+                                if tc:
+                                    for t in tc:
+                                        fn = t.get("function", {})
+                                        yield f"\n[工具调用] {fn.get('name', '?')}({fn.get('arguments', '')})"
+                            except Exception:
+                                pass
+        except Exception as e:
+            yield f"[STREAM ERROR] {e}"
+
+    @staticmethod
+    def _parse_response(data: dict) -> Message:
+        import json
+        choice = data["choices"][0]
+        msg = choice.get("message", {})
+        content = msg.get("content") or ""
+        reasoning = msg.get("reasoning_content") or ""
+        raw_tool_calls = msg.get("tool_calls")
+
+        tool_calls = None
+        if raw_tool_calls:
+            tool_calls = [
+                ToolCall(
+                    id=tc.get("id", f"call_{i}"),
+                    name=tc.get("function", {}).get("name", ""),
+                    arguments=DeepSeekAdapter._safe_parse_json(
+                        tc.get("function", {}).get("arguments", "{}")
+                    ),
+                )
+                for i, tc in enumerate(raw_tool_calls)
+            ]
+
+        return Message(role="assistant", content=content, tool_calls=tool_calls, reasoning_content=reasoning)
 
     def _build_api_messages(self, messages: list[Message]) -> list[dict]:
         """将内部 Message 列表转换为 DeepSeek API 格式"""

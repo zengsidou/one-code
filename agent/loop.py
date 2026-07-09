@@ -25,6 +25,7 @@ from agent.orchestrator import AgentOrchestrator
 from agent.checkpoint import AgentCheckpoint
 from agent.contract_first import ContractFirstOrchestrator
 from agent.goal_verifier import GoalVerifier
+from agent.constraints import ConstraintEnforcer
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -149,6 +150,7 @@ class AgentLoop:
         self._rules = rules
         self._token_opt = token_optimizer
         self._goal_verifier = GoalVerifier(self.llm)
+        self._constraints = ConstraintEnforcer()
         self._error_count = 0
         self._max_errors = 5
 
@@ -284,7 +286,12 @@ class AgentLoop:
 
             query = user_input[:200] if len(user_input) > 200 else user_input
             context = self.memory.get_context(query=query)
-            context.insert(0, Message(role="system", content=self._build_system_prompt()))
+            system_prompt = self._build_system_prompt()
+            # 注入运行时约束提示
+            hint = self._constraints.get_constraint_hint()
+            if hint:
+                system_prompt += f"\n\n[运行时约束]\n{hint}"
+            context.insert(0, Message(role="system", content=system_prompt))
 
             # ━━━ 上下文压力感知 ━━━
             token_count = self.memory.short_term.get_token_count()
@@ -349,6 +356,13 @@ class AgentLoop:
                     if self.observability:
                         self.observability.trace_tool_start(step, tc.name, tc.arguments)
                     result = self.registry.execute(tc.name, tc.arguments)
+                    # ━━━ 约束检查 ━━━
+                    constraint_hint = self._constraints.after_tool_call(
+                        tc.name, tc.arguments, result,
+                        self.memory.short_term.get_messages(),
+                    )
+                    if constraint_hint:
+                        result = result + "\n" + constraint_hint
                     # ━━━ Token 优化：压缩工具输出 ━━━
                     if self._token_opt:
                         result = self._token_opt.compress_tool_output(result)

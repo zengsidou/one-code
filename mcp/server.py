@@ -31,7 +31,7 @@ class MCPServer:
             return self._handle_initialize(msg_id, data.get("params", {}))
         elif method == "notifications/initialized":
             self._initialized = True
-            return None  # No response for notifications
+            return None
         elif not self._initialized:
             return self._error(msg_id, ErrorCode.SERVER_NOT_INITIALIZED, "Server not initialized")
 
@@ -39,6 +39,14 @@ class MCPServer:
             return self._handle_tools_list(msg_id)
         elif method == "tools/call":
             return self._handle_tools_call(msg_id, data.get("params", {}))
+        elif method == "resources/list":
+            return self._handle_resources_list(msg_id)
+        elif method == "resources/read":
+            return self._handle_resources_read(msg_id, data.get("params", {}))
+        elif method == "prompts/list":
+            return self._handle_prompts_list(msg_id)
+        elif method == "prompts/get":
+            return self._handle_prompts_get(msg_id, data.get("params", {}))
         elif method == "ping":
             return make_response(msg_id, {})
         elif method == "shutdown":
@@ -73,6 +81,8 @@ class MCPServer:
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {
                 "tools": {},
+                "resources": {"listChanged": False},
+                "prompts": {},
             },
             "serverInfo": {
                 "name": self.name,
@@ -97,7 +107,58 @@ class MCPServer:
             "type": "text",
             "text": result,
             "isError": is_error,
-        }]).to_json()
+        }])
+
+    def _handle_resources_list(self, msg_id) -> str:
+        """列出可用资源 — 工作区文件"""
+        import os
+        resources = []
+        try:
+            for f in os.listdir("."):
+                if os.path.isfile(f) and not f.startswith("."):
+                    resources.append({
+                        "uri": f"file:///{os.path.abspath(f)}",
+                        "name": f,
+                        "mimeType": "text/plain",
+                    })
+        except Exception:
+            pass
+        return make_result(msg_id, resources if resources else [])
+
+    def _handle_resources_read(self, msg_id, params: dict) -> str:
+        """读取资源内容"""
+        uri = params.get("uri", "")
+        path = uri.replace("file:///", "").replace("file://", "")
+        if not path or not os.path.exists(path):
+            return self._error(msg_id, ErrorCode.INVALID_PARAMS, f"Resource not found: {uri}")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()[:5000]
+            return make_result(msg_id, [{"type": "text", "text": content}])
+        except Exception as e:
+            return self._error(msg_id, ErrorCode.INTERNAL_ERROR, str(e))
+
+    def _handle_prompts_list(self, msg_id) -> str:
+        """列出可用 prompt 模板"""
+        prompts = [
+            {"name": "code-review", "description": "代码审查 prompt"},
+            {"name": "write-tests", "description": "为指定代码生成测试"},
+            {"name": "refactor", "description": "重构指定代码"},
+            {"name": "explain-code", "description": "解释代码逻辑"},
+        ]
+        return make_result(msg_id, prompts)
+
+    def _handle_prompts_get(self, msg_id, params: dict) -> str:
+        """获取 prompt 模板内容"""
+        name = params.get("name", "")
+        prompts = {
+            "code-review": "请审查以下代码的质量、安全性和可维护性，给出具体改进建议。",
+            "write-tests": "请为以下代码编写全面的单元测试，覆盖边界情况和错误路径。",
+            "refactor": "请重构以下代码，提高可读性和可维护性，不改变外部行为。",
+            "explain-code": "请用中文详细解释这段代码的逻辑、数据流和关键设计决策。",
+        }
+        text = prompts.get(name, f"未知 prompt: {name}")
+        return make_result(msg_id, [{"type": "text", "text": text}]).to_json()
 
     def _handle_shutdown(self, msg_id) -> str:
         return make_response(msg_id, {}).to_json()
