@@ -68,22 +68,18 @@ def main():
 
     use_contract = "--contract" in sys.argv or "-c" in sys.argv
     use_stream = "--stream" in sys.argv or "-s" in sys.argv
+    verbose = False  # /debug 切换详细模式
 
-    register_builtin_tools(registry, sandbox=sandbox, llm=llm)
-    load_plugin_tools(registry)
-    short_mem = ShortTermMemory()
-    long_mem = LongTermMemory(llm, persist_dir="./chroma_data")
-    memory = MemoryManager(short=short_mem, long=long_mem)
-
-    agent = AgentLoop(
-        llm=llm, registry=registry, memory=memory, max_steps=15,
-        enable_contract_first=use_contract,
-    )
-
+    print(Colors.c("=" * 60, Colors.CYAN))
+    print(Colors.c("  One-Code Framework", Colors.CYAN))
+    print(Colors.c("  Agent Loop + Tool Use + Contract-First", Colors.CYAN))
+    print(Colors.c("=" * 60, Colors.CYAN))
     print(f"  LLM:       {Colors.c(model_name, Colors.BLUE)}")
     print(f"  Context:   {Colors.c(f'{short_mem.max_tokens//1024}K tokens', Colors.BLUE)}")
     print(f"  Tools:     {Colors.c(str(len(registry.tool_names)), Colors.GREEN)}")
     print(f"  Contract:  {Colors.c('ON' if use_contract else 'OFF', Colors.MAGENTA)}")
+    print(Colors.c("-" * 60, Colors.CYAN))
+    print(f"  /exit     /tools   /memory   /clear   /debug   /stream")
     print(Colors.c("-" * 60, Colors.CYAN))
     print(f"  /exit     /tools   /memory   /clear{'  /stream' if not use_stream else ''}")
     print(Colors.c("-" * 60, Colors.CYAN))
@@ -115,19 +111,16 @@ def main():
                 memory.clear(); print(f"{Colors.c('记忆已清空', Colors.GREEN)}\n")
             elif cmd == "/stream":
                 use_stream = not use_stream; print(f"{Colors.c('流式输出: ' + ('ON' if use_stream else 'OFF'), Colors.MAGENTA)}\n")
+            elif cmd == "/debug":
+                verbose = not verbose; print(f"{Colors.c('详细模式: ' + ('ON' if verbose else 'OFF'), Colors.MAGENTA)}\n")
             else:
                 print(f"{Colors.c('未知命令', Colors.RED)}: {cmd}\n")
             continue
 
-        if use_stream:
-            print(Colors.c("  ...思考中...", Colors.YELLOW))
-            for token in llm.generate_stream(agent.memory.short_term.get_messages(), agent.registry.get_schemas()):
-                print(token, end="", flush=True)
+        if verbose:
             print()
-        else:
-            print(Colors.c("  ...思考中...", Colors.YELLOW))
-            response = agent.run(raw)
-            print(f"{Colors.c(response, Colors.CYAN)}")
+        response = agent.run(raw, debug=verbose)
+        print(f"{Colors.c(response, Colors.CYAN)}")
         print()
 
 

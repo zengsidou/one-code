@@ -1,0 +1,4 @@
+[console_scripts]
+one-code = main:main
+one-code-desktop = ide_desktop:main
+one-code-ide = ide_server:main

@@ -149,13 +149,6 @@ class AgentLoop:
         if "[RESTART]" in result:
             return result
 
-        if "[STOPPED]" not in result and "[ERROR]" not in result and "[SOFT-FAIL]" not in result and len(result) > 200:
-            gv = self._goal_verifier.verify(user_input, result)
-            if not gv.get("passed"):
-                result = f"[GOAL-FAIL] {gv.get('reason', '')}"
-                if debug:
-                    print(f"  [GOAL] 独立 judge 判定未完成: {gv['reason']}")
-
         if self.observability:
             failed = "[STOPPED]" in result or "[SOFT-FAIL]" in result or "[LLM error]" in result
             self.observability.end_run(
@@ -246,12 +239,19 @@ class AgentLoop:
                     return "[STOPPED] 检测到重复工具调用回路，已中断。"
 
                 for tc in tool_calls:
+                    if debug:
+                        arg_preview = json.dumps(tc.arguments, ensure_ascii=False)[:80]
+                        print(f"  [Step{step}] {tc.name}({arg_preview})", end="", flush=True)
                     tool_msg_content = f"调用工具: {tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})"
                     self._step_trace.append(f"Step{step}: call {tc.name}")
                     self.memory.add_message(Message(role="assistant", content=tool_msg_content, tool_calls=[tc], reasoning_content=getattr(response, "reasoning_content", "") or ""))
                     if self.observability:
                         self.observability.trace_tool_start(step, tc.name, tc.arguments)
                     result = self.registry.execute(tc.name, tc.arguments)
+                    if debug:
+                        rshort = result.replace('\n', ' ')[:50]
+                        is_ok = not result.startswith("[ERROR]")
+                        print(f" -> {'OK' if is_ok else 'ERR'} ({len(result)}c)", flush=True)
                     get_hooks().fire("tool.after", name=tc.name, args=tc.arguments, result=result)
                     constraint_hint = self._constraints.after_tool_call(
                         tc.name, tc.arguments, result,
@@ -270,6 +270,8 @@ class AgentLoop:
                         tool_call_id=tc.id, tool_name=tc.name,
                     ))
                     if result.startswith("[ERROR]"):
+                        if debug:
+                            print(f" ERR: {result[:80]}")
                         self._step_trace.append(f"Step{step}: ERROR {tc.name}")
                         is_tool_crash = (
                             result.startswith("[ERROR] Unknown tool")
