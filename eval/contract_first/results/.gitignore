@@ -1,0 +1,7 @@
+﻿# keep scored summary; ignore bulky run dumps
+runs/
+workspaces/
+*
+!.gitignore
+!rows.jsonl
+!README.md
