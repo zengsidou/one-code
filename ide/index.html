@@ -23,6 +23,7 @@ select{background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:3
 .btn{padding:calc(var(--fs)*0.1) calc(var(--fs)*0.4);border:1px solid #30363d;border-radius:calc(var(--fs)*0.5);background:transparent;color:#8b949e;cursor:pointer;font-size:calc(var(--fs)*0.8)}
 .btn.on{background:#58a6ff;border-color:#58a6ff;color:#fff}
 .dot{width:calc(var(--fs)*0.4);height:calc(var(--fs)*0.4);border-radius:50%;background:#3fb950;display:inline-block}
+.ctx:hover .ctx-tt{display:block}
 </style>
 <script>document.documentElement.style.setProperty('--fs',Math.max(16,Math.min(34,Math.round(16*(window.devicePixelRatio||1)*screen.availWidth/1920)))+'px')</script>
 </head><body>
@@ -45,12 +46,15 @@ select{background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:3
  </div>
 </div>
 <div class="panel">
- <h3>Tasks</h3><div id="tasks"></div>
- <hr style="border-color:#30363d;margin:calc(var(--fs)*0.5) 0">
  <h3>Context</h3>
- <div style="font-size:calc(var(--fs)*1.2);font-weight:700;color:var(--fg)" id="ctxTokens">-</div>
- <div style="font-size:calc(var(--fs)*0.75);color:#8b949e" id="ctxPct">-</div>
- <div style="font-size:calc(var(--fs)*0.75);color:#8b949e" id="ctxCost">-</div>
+ <div style="font-weight:700;font-size:calc(var(--fs)*1.1)" id="ctxTokens">-</div>
+ <div style="color:#8b949e;font-size:calc(var(--fs)*0.8)" id="ctxPct">-</div>
+ <div style="color:#8b949e;font-size:calc(var(--fs)*0.8)" id="ctxCost">-</div>
+ <hr style="border-color:#30363d;margin:calc(var(--fs)*0.5) 0">
+ <h3>工作目录</h3>
+ <div style="font-size:calc(var(--fs)*0.75);word-break:break-all" id="cwd">-</div>
+ <hr style="border-color:#30363d;margin:calc(var(--fs)*0.5) 0">
+ <h3>Tasks</h3><div id="tasks"></div>
 </div>
 <script>
 var E=function(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
@@ -73,7 +77,7 @@ function S(){var t=document.getElementById('inp').value.trim();if(!t)return
    clearInterval(timer);var elapsed=Math.round((Date.now()-st)/1000)
    document.getElementById('dot').style.background='#3fb950'
    document.getElementById('status').textContent='Done ('+elapsed+'s)'
-   var el=document.getElementById('stream');if(el)el.innerHTML=M(buf+'<div style="font-size:calc(var(--fs)*0.65);color:#8b949e;margin-top:4px">Thought: '+elapsed+'s · <span id="ctxT">-</span> tokens · ¥<span id="ctxC">-</span></div>')
+   var el=document.getElementById('stream');if(el){el.innerHTML=M(buf);el.innerHTML+='<div style="font-size:calc(var(--fs)*0.65);color:#8b949e;margin-top:4px">Thought: '+elapsed+'s · <span id="ctxT">-</span> tokens · ¥<span id="ctxC">-</span></div>'}
    ws.close();pollUsage()
   }else if(d.type==='error'){clearInterval(timer);A(d.text,'err');ws.close()}
  }
