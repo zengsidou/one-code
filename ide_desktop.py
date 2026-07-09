@@ -3,8 +3,15 @@
 import os, sys, io, threading
 
 # Suppress all console output
+import os, sys, io, threading, logging
+os.environ["PYTHONWARNINGS"] = "ignore"
+os.environ["PYTHONIOENCODING"] = "utf-8"
 sys.stdout = io.StringIO()
 sys.stderr = io.StringIO()
+logging.basicConfig(stream=io.StringIO(), level=logging.CRITICAL)
+for name in logging.root.manager.loggerDict:
+    logging.getLogger(name).setLevel(logging.CRITICAL)
+    logging.getLogger(name).propagate = False
 
 IDE_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("ONE_CODE_PORT", "8765"))
