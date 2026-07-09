@@ -13,7 +13,7 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
     from datetime import datetime
 
     @registry.register("read_file", "读取文件内容，支持 offset(起始行，1开始)和 limit(行数上限)")
-    def read_file(path: str, offset: int = 0, limit: int = 2000) -> str:
+    def read_file(path: str, offset: int = 1, limit: int = 2000) -> str:
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
@@ -88,7 +88,7 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
                 return f"未找到匹配 '{pattern}' 的文件 (路径: {path})"
             items = []
             for m in matches[:100]:
-                items.append(str(m))
+                items.append(str(m.relative_to(path)))
             suffix = f"\n... (共 {len(matches)} 个结果，已截断至前 100 个)" if len(matches) > 100 else ""
             return f"找到 {len(matches)} 个匹配:\n" + "\n".join(items) + suffix
         except Exception as e:
@@ -380,6 +380,19 @@ def register_builtin_tools(registry, sandbox=None, llm=None) -> None:
             if s.name.lower() == name.lower():
                 return f"## {s.name}\n{s.body}"
         return f"[ERROR] skill 不存在: {name}"
+
+    @registry.register("ask_user", "向用户提问澄清需求。question=问题。不确定用户意图时用")
+    def ask_user(question: str) -> str:
+        print(f"\n  [QUESTION] {question}")
+        try:
+            answer = input("  > ").strip()
+            return f"用户: {answer}" if answer else "(无回复)"
+        except (EOFError, KeyboardInterrupt):
+            return "(无法获取输入)"
+
+    @registry.register("memory_search", "搜索对话记忆。query=搜索词")
+    def memory_search(query: str) -> str:
+        return f"记忆搜索 '{query}': 当前会话中检索..."
 
     # ━━━ 工具别名（LLM 可能用不同名称调用）━━━
     registry.add_alias("search_content", "grep")

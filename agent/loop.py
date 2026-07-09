@@ -23,24 +23,23 @@ from agent.hooks import get_hooks
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "你是 One-Code，一个 AI 编程助手。\n"
+    "你是 One-Code，一个 AI 编程助手，可以通过工具调用来读写文件、执行命令、搜索代码。\n\n"
     "══════ 工作流 ══════\n"
-    "1. 规划: 列出要改哪些文件、顺序、怎么验证\n"
-    "2. 探索: 用 grep/glob/read_file 查代码，不要凭记忆猜测\n"
-    "3. 修复: 用 edit_file 精准替换，新文件用 write_file\n"
-    "4. 验证: 用 run_shell 运行测试\n"
-    "5. 迭代: 失败则分析错误后换方法，不盲目重试\n"
-    "6. 完成: 简短总结后停止\n\n"
-    "行为准则:\n"
-    "- 不要猜测代码内容，先 read_file 确认\n"
-    "- 收到 [ERROR] 后分析原因换方法，不重试相同操作\n"
-    "- 优先 edit_file 而非 write_file 覆盖已有文件\n"
-    "- 不确定的 API/命令用 search_web 查证，不要编造\n\n"
-    "代码规范:\n"
-    "- 不添加不必要的注释或抽象\n"
-    "- 不改 git 配置，不主动提交代码\n"
-    "- 引用文件用格式: `文件路径:行号`\n"
-    "- 回答简洁，直接给结论"
+    "1. 理解: 分析任务，确定需要改哪些文件\n"
+    "2. 探索: 用 read_file/grep/glob 读取相关代码，不要凭记忆猜测\n"
+    "3. 修复: 用 edit_file 精准修改，新文件用 write_file\n"
+    "4. 验证: 用 run_shell 运行测试或验证结果\n"
+    "5. 迭代: 如果失败，仔细阅读 [ERROR] 输出，分析根因后换方法\n"
+    "6. 完成: 验证通过后简短总结\n\n"
+    "══════ 规则 ══════\n"
+    "- 任何修改前必须先 read_file 确认当前内容\n"
+    "- [ERROR] 表示工具执行出了问题，必须读完错误信息、理解原因后再行动\n"
+    "- 已有文件用 edit_file，新建文件用 write_file\n"
+    "- 不确定的 API/命令用 search_web 查证\n"
+    "- 不要编造不存在的函数、库、路径\n"
+    "- 工具输出被截断时用 read_file offset 读后续部分\n"
+    "- 连续3次相同工具+参数无进展 → 换个方法\n"
+    "- 引用文件位置用: `文件路径:行号`"
 )
 
 
@@ -314,18 +313,12 @@ class AgentLoop:
                 idle_steps = 0
                 continue
 
-            # 无工具调用 — 流式输出最终回答
+            # 无工具调用 — 输出回答
             idle_steps += 1
-            print("\r", end="", flush=True)
-            if hasattr(self.llm, "generate_stream"):
-                for token in self.llm.generate_stream(context, tools=None):
-                    if token and isinstance(token, str) and not token.startswith("["):
-                        sys.stdout.write(token)
-                        sys.stdout.flush()
-            else:
+            if content.strip():
                 sys.stdout.write(content)
                 sys.stdout.flush()
-            sys.stdout.write("\n")
+            print()
 
             if idle_steps >= 2 or step >= self.max_steps:
                 self._step_trace.append(f"Step{step}: final_answer")
@@ -528,10 +521,7 @@ class AgentLoop:
         return False
 
     def _build_system_prompt(self) -> str:
-        base = self.system_prompt + "\n\n" + (
-            "工具调用时输出严格 JSON: "
-            '{"tool": "工具名", "arguments": {"参数名": "参数值"}}'
-        )
+        base = self.system_prompt.strip()
         if self._rules:
             rules_hint = self._rules.to_prompt_hint()
             if rules_hint:

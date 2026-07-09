@@ -63,16 +63,18 @@ class ShortTermMemory:
                 self._messages.popleft()
 
     def _summarize_oldest(self):
-        """LLM 摘要最旧的消息块，释放上下文窗口"""
+        """LLM 摘要最旧的消息块"""
         msgs = list(self._messages)
         old = msgs[:10]
         if not old:
             return
         summary = self._llm_summarize(old)
-        # 替换最旧的 10 条消息为摘要
+        # Pop oldest, then prepend summary
         for _ in range(len(old)):
-            if self._messages:
+            if self._messages and self._messages[0] in old:
                 self._messages.popleft()
+            else:
+                break
         self._messages.appendleft(summary)
 
     def _llm_summarize(self, messages: list[Message]) -> Message:
