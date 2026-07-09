@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "one-code"
 version = "0.1.0"
-description = "AI Coding Agent Framework with Contract-First execution, multi-model support, and LSP code intelligence"
+description = "Coding Agent Harness: Agent Loop, tools, multi-agent orchestration, sandbox, DeepSeek Function Calling"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
@@ -46,4 +46,4 @@ one-code-desktop = "ide_desktop:main"
 py-modules = ["main", "ide_server", "ide_desktop"]
 
 [tool.setuptools.packages.find]
-include = ["agent*", "llm*", "memory*", "tools*", "mcp*", "sandbox*", "eval*", "ci*", "ide*"]
+include = ["agent*", "llm*", "memory*", "tools*", "sandbox*", "ide*"]

@@ -1,139 +1,93 @@
-# One-Code Framework
+# One-Code
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org/)
-[![Built with MiMo Code](https://img.shields.io/badge/built%20with-MiMo%20Code-orange)](https://github.com/XiaoMi/MiMo)
 
-> **全程用 [MiMo Code](https://github.com/XiaoMi/MiMo) 开发**——一个用 Harness 系统构建的 Harness 系统。
+Python 实现的 **Coding Agent Harness**：Agent Loop、工具调用、多 Agent 编排、沙箱与记忆。默认对接 DeepSeek Function Calling。
 
-从零实现的 Agent 框架，具备**自我进化能力**——能从失败中学习、自动修复缺陷、甚至修改自己的源代码。覆盖 **AI Coding / AI Agent / Harness Engineering** 三大方向。
+> 原名 **micro-agent**，现已统一为 **One-Code**。本仓库曾包含自进化 / SWE-bench / 完整 MCP 等实验模块，已主动删减。文档只描述**当前可运行**的能力。
 
----
-
-## 为什么值得关注
-
-- 🏗️ **用 Harness 构建 Harness**：全程使用 MiMo Code（SWE-bench Pro V2 57.2%，MIT 开源）开发，项目本身即是 Harness Engineering 的最佳实践证据
-- 🧠 **自进化引擎 L0-L4**：从修复复用到架构自演进，Agent 能自己改自己的代码
-- 📊 **SWE-bench 评测**：集成 Agentless 3 阶段策略，自动化 AI Coding 能力评测
-- 🔒 **企业级**：权限控制、审计日志、可观测性仪表盘
-- ✅ **52 项单元测试**：覆盖核心模块
-- 📝 **105 commits**：持续迭代的开发记录
+仓库：https://github.com/zengsidou/one-code
 
 ---
 
-## 架构
+## 当前能力
 
-```mermaid
-graph TB
-    subgraph "Harness 六层架构"
-        L1[L1 信息边界层<br/>AGENTS.md + 角色提示]
-        L2[L2 工具系统层<br/>装饰器注册 + Schema]
-        L3[L3 执行编排层<br/>ReAct / Plan-then-Execute]
-        L4[L4 记忆状态层<br/>短期 64K + ChromaDB]
-        L5[L5 评估观测层<br/>独立评估器 + 仪表盘]
-        L6[L6 约束恢复层<br/>权限 + 熔断 + 审计]
-    end
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| Agent Loop | ✅ | ReAct；可选 Plan-then-Execute、契约先行 |
+| 工具系统 | ✅ | 读写文件、grep/glob、shell、git、web、LSP、skills 等 |
+| 多 Agent | ✅ | SubAgent 委派；Orchestrator fan-out / pipeline；Coder/Reviewer/Tester/Doc |
+| 记忆 | ✅ | 短期上下文 + ChromaDB 长期检索 |
+| 沙箱 | ✅ | 命令策略、路径 jail、输出截断 |
+| Token 优化 | ✅ | 工具输出压缩 / 摘要 |
+| Skills | ✅ | `~/.onecode/skills` 与项目内 skill 加载 |
+| CLI | ✅ | `python main.py` |
+| Web IDE | ✅ | `python ide_server.py` / 桌面入口 |
+| 测试 | ✅ | `pytest`：**25 passed** |
+| Checkpoint / Hooks / GoalVerifier | ⚠️ stub | 接口保留，逻辑已移除 |
+| MCP 服务入口 | ❌ 已移除 | `main_mcp*.py` 依赖的 `mcp` 包不在仓库中 |
+| 自进化 L0–L4 / SWE-bench runner | ❌ 已移除 | 不再维护 |
 
-    subgraph "自进化引擎"
-        E0[L0 FixHistory<br/>跨会话复用修复]
-        E1[L1 SelfRepair<br/>自动调参/工具修复]
-        E2[L2 MetaOptimizer<br/>优化自优化组件]
-        E3[L3 Evolution<br/>复盘→技能库→画像]
-        E4[L4 Architecture<br/>源码级自演进]
-        E0 --> E1 --> E2 --> E3 --> E4
-    end
+---
 
-    L1 --> L2 --> L3 --> L4 --> L5 --> L6
-```
+## 架构（现状）
 
 ```
 one-code/
-├── agent/                    # Agent 核心（1180 行 Agent Loop）
-│   ├── loop.py               # ReAct / Plan-then-Execute + 熔断 + 回路检测
-│   ├── orchestrator.py       # 多 Agent 编排 (fan-out / pipeline)
-│   ├── subagent.py           # 子 Agent 委派
-│   ├── specialists.py        # 专业化 Agent (Coder/Reviewer/Tester/Doc)
-│   ├── diagnosis.py / root_cause.py / self_repair.py / verify.py  # 自修复链
-│   ├── governance.py         # 权限控制 + 审计日志
-│   ├── observability.py      # 指标/追踪/报告
-│   ├── evaluator.py          # 独立评估 Agent (5 维度)
-│   ├── token_optimizer.py    # Token 用量优化
-│   └── evolve/               # 进化引擎 L0-L4
-├── eval/                     # SWE-bench Lite 评测
-│   └── swebench_runner.py    # Agentless 3 阶段策略
-├── ci/                       # CI/CD 流水线 + 仪表盘
-├── llm/ memory/ tools/ mcp/ sandbox/  # 基础设施
-├── tests/                    # 52 项单元测试
-├── main.py                   # 交互式 CLI
-└── ide_server.py             # Web IDE
+├── agent/                 # Loop、编排、子 Agent、契约先行、skills、token 优化
+├── tools/                 # 注册表、内置工具、LSP、shell 安全、智能编辑
+├── llm/                   # DeepSeek / OpenAI / Gemini / Ollama
+├── memory/                # 短期 + 长期 + context boot
+├── sandbox/               # 策略与安全执行
+├── ide/ + ide_server.py   # Web IDE
+├── tests/                 # 单元测试
+└── main.py                # 交互式 CLI
 ```
-
----
-
-## 核心特性
-
-### 🧠 自进化引擎
-
-| 层级 | 能力 | 说明 |
-|------|------|------|
-| L0 | FixHistory | 跨会话复用已验证修复 |
-| L1 | SelfRepair | 自动调参 / prompt / 工具代码 / 模型切换 |
-| L2 | MetaOptimizer | 优化自优化组件自身 |
-| L3 | Evolution | 复盘 → 技能库 → 画像 → 挑战生成 |
-| L4 | Architecture | 读源码 + 生成改动 + 自测试 + 保留/回滚 |
-
-### 📊 SWE-bench 评测
-
-- 300 实例 SWE-bench Lite 自动化评测
-- Agentless 3 阶段策略（定位 → 修复 → 验证）
-- 失败自动重试 + Plan-then-Execute 模式切换
-- Gitee 镜像仓库支持
-
-### 🔒 企业级能力
-
-- **权限控制**：工具级 allow/deny + 风险分级 + 配额 + 工作区隔离
-- **审计日志**：JSONL 格式，agent/tool/risk/details/time
-- **可观测性**：指标 / token 追踪 / 工具耗时 / 仪表盘
-- **Token 优化**：prompt 缓存 / 输出压缩 / compact / flash 降级
-
-### 🔗 集成 & 对标
-
-- **OpenHands / OpenClaw**：Agent 框架对标，多 Agent 协作
-- **MCP Protocol**：stdio / SSE 双传输，标准化接口
-- **DeepSeek V4 Pro**：原生 Function Calling + reasoning_content
 
 ---
 
 ## 快速开始
 
 ```bash
-# 依赖
-pip install chromadb httpx datasets unidiff GitPython
+pip install -r requirements.txt
 
-# 交互式 CLI
-$env:DEEPSEEK_API_KEY = "your-key"
-python main.py
+# 需要 DeepSeek API Key
+set DEEPSEEK_API_KEY=your-key          # Windows CMD
+# $env:DEEPSEEK_API_KEY = "your-key"   # PowerShell
 
-# SWE-bench 评测
-python -m eval.swebench_runner --max 5 --repo "django/django"
+python main.py                         # CLI
+python main.py --contract-first        # 契约先行：先确认方向再执行
+python ide_server.py                   # Web IDE
+```
 
-# CI 流水线
-python -m ci.pipeline
+运行测试：
 
-# 开启 Plan-then-Execute 模式
-agent = AgentLoop(plan_first=True, ...)
+```bash
+python -m pytest tests/ -q
 ```
 
 ---
 
-## 开发方式
+## 核心入口说明
 
-本项目全程使用 [MiMo Code](https://github.com/XiaoMi/MiMo) 开发。MiMo Code 是小米 2026 年 6 月开源的 AI Coding 工具（MIT 协议），SWE-bench Pro V2 得分 57.2%，200 步以上长任务胜率 65%。
+- **`agent/loop.py`**：主循环；熔断、回路检测、可选 plan-first / contract-first
+- **`tools/builtin/`**：内置工具（含 `delegate_task` 子 Agent）
+- **`agent/orchestrator.py` / `subagent.py`**：并行/串行多 Agent
+- **`agent/specialists.py`**：角色化 Agent（Coder / Reviewer / Tester / Doc）
+- **`sandbox/`**：执行策略与隔离
+- **`llm/deepseek_api.py`**：DeepSeek 原生 Function Calling（默认 `deepseek-v4-pro`）
 
-用 AI Coding 工具构建 AI Coding 框架——这本身就是 Harness Engineering 的最佳实践。
+---
+
+## 设计取舍（诚实版）
+
+**保留**：能直接支撑「写代码 / 改文件 / 跑命令 / 委派子任务」的主路径，以及可观测的测试。
+
+**删减**：自进化、完整评测流水线、MCP 服务端等——减少半成品与文档漂移。若重新引入，会先落地代码与测试，再写回文档。
 
 ---
 
 ## License
 
-Apache 2.0 © 2026
+Apache 2.0

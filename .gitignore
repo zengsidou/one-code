@@ -1,8 +1,10 @@
 chroma_data/
+tmp_chroma/
 memory_db/
 debug_db*/
 test_memory_db/
 test_db/
+*.egg-info/
 __pycache__/
 *.pyc
 .env
